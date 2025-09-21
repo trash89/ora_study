@@ -1,0 +1,142 @@
+About SwingBench
+
+Swingbench is a load generator and associated set of utilities. 
+The software enables a load to be generated and the transactions/response times to be charted. 
+The tool has both graphical and command line functionality.
+
+Swingbench can be used to demonstrate and test technologies such as Real Application Clusters, 
+Online table rebuilds, Standby databases, Online backup and recovery etc.
+
+The code that ships with SwingBench includes 7 benchmarks, OrderEntry, SalesHistory, TPC-DS Like, TPC-H Like, JSON, Movie Stream and StressTest..
+
+- OrderEntry is based on the “oe” schema that ships with the Oracle Database. 
+    It has been modified so that Spatial, Intermedia schema’s do not need to be installed. 
+    It can be run continuously (that is until you run out of space). 
+    It introduces heavy contention on a small number of tables and is designed to stress interconnects and memory. 
+    It is installed using the “oewizard” located in the bin directory. 
+    Both a pure jdbc and PL/SQL (lower network overhead) variant exist of the benchmark.
+
+- SalesHistory is based on the “sh” schema that ships with Oracle 12c/Oracle 18c/Oracle 19c 
+    and is designed to test the performance of complicated queries when run against large tables. 
+    It is read only and can be scaled over a number of default sizes FROM 1GB to 1TB. 
+    A custom mode also allows for the creation of smaller and larger schemas
+
+- StressTest simply fires random inserts,updates,SELECTs and updates against a well know table.
+
+- JSON Stresstest is based on simple JSON documents modelling people flying between airports. It follow a basic CRUD model
+
+- TPC-DS Like is a benchmark similar to TPC-DS. It features a complex analytical and transaction workload.
+
+- TPC-H Like is similar to the well known TPC_H benchmark. The queries used are of moderate query complexity.
+
+- MovieStream loosely simulates some of the transactions you might see on a moving streaming service.
+
+
+Setting Up
+
+Before you can run a test/benchmark you need to create a schema and install a set of sample data. 
+This is done via the wizards that are installed in the bin directory. 
+They can be run in command line or graphical modes. 
+There are four wizards to choose FROM.
+
+- oewizard    : Installs a simple order entry schema that is used to create a heavy write workload
+- shwizard    : Installs a simple star schema that is used to create an analytics workload
+- jsonwizard  : Installs a simple JSON schema that is used to create a JSON CRUD workload
+- tpcdswizard : Installs a TPC-DS like schema that is used to create a complex analytics workload
+- tpchwizard  : Installs a TPC-H like schema that is used to create a medium-complexity analytics workload
+- moviewizard : Installs a Movie Stream schema that features primarily OLTP like transactions but also uses AQ Sharded Queues to simulate events used in microservices.
+
+-- configs in ~/bench/swingbench/configs
+
+OracleUser  ConfigFile
+----------  -------------------------
+movie       MovieStream.xml
+sh          Sales_History.xml
+tpcdslike   TPCDS_Transactions.xml
+tpcdslike   TPCDS_Like_Workload.xml
+tpch        TPCH_Like_Workload.xml
+tpch        TPCH_Transactions.xml
+soe         SOE_Server_Side_V2.xml
+soe         SOE_Client_Side_AC.xml
+soe         SOE_Client_PLSQL_Sharded.xml
+soe         SOE_Client_Side.xml
+soe         SOE_Client_Side_TrueCache.xml
+soe         SOE_Server_Side_V1.xml
+scott       Stress_Test.xml
+passenger   JSON_Workload.xml
+
+-- launch a test
+./charbench \
+-c ../configs/SOE_Server_Side_V2.xml \
+-r $HOME/results.xml \
+-nc \
+-rt 00:05 \
+-mt 100000 \
+-uc 10 \
+-rr 10 \
+-u soe -p soe -cs o19cspdb1 \
+-dbau system -dbap manager \
+-v tpm,tps,resp,dml
+
+
+./results2pdf -c $HOME/results.xml -o $HOME/results.pdf
+
+marius@mylaptop:~/bench/swingbench/bin $ ./charbench --help
+usage: parameters:
+ -a                            run automatically
+ -be <stopafter>               end recording statistics after. Value is in the form hh:mm.sec
+ -bg                           indicate that charbench will be run in the background
+ -bs <startafter>              start recording statistics after. Value is in the form hh:mm.sec
+ -c <filename>                 specify config file
+ -cf <username>                the location of a crendentials file for Oracle Cloud (ADW/ATP./ExaExp)
+ -co <hostname>                specify/override coordinator in configuration file.
+ -com <comment>                specify comment for this benchmark run (in double quotes)
+ -cpuloc <hostname >           specify/overide location/hostname of the cpu monitor.
+ -cpupass <arg>                specify/overide os password of the user used to monitor cpu.
+ -cpuuser <arg>                specify/overide os username of the user used to monitor cpu.
+ -cs <connectstring>           override connect string in configuration file
+ -D <variable=value>           use value for given environment variable
+ -dbap <password>              the password of admin user (used for collecting DB Stats)
+ -dbau <username>              the username of admin user (used for collecting DB stats)
+ -debug                        turn on debugging. Written to standard out
+ -debugf <debugfile>           turn on debugging. Write output to <debugfile> defaults to debug.log.
+ -debugfine                    turn on finest level of debugging
+ -di <shortname(s)>            disable transactions(s) by short name, comma separated
+ -dt <drivertype>              override driver type in configuration file (thin, oci, ttdirect, ttclient)
+ -dumptx                       output transaction response times to file
+ -dumptxdir <directory name>   directory for transaction response times files
+ -en <shortname(s)>            enable transactions(s) by short name, comma separated
+ -env                          display environment configuration
+ -f                            force data collection and run termination regardless of state
+ -g <groupID>                  distributed group identifier
+ -h,--help                     print this message
+ -i                            run interactively (default)
+ -intermax <milliseconds>      override minimum inter transaction sleep time (default = 0)
+ -intermin <milliseconds>      override minimum inter transaction sleep time (default = 0)
+ -ld <milliseconds>            specify/overide the logon delay (milliseconds)
+ -max <milliseconds>           override maximum intra transaction think time in configuration file
+ -min <milliseconds>           override minimum intra transaction think time in configuration file
+ -mr                           produce a mini report of the results of a run
+ -mt <maxtrans>                maximum tasks to be executed before terminating run
+ -nc                           Don't use color output
+ -nr                           don't produce a results file at the end of a run
+ -ot <output type>             output type (json or std), defaults to std
+ -p <password>                 override password in configuration file
+ -P <property=value>           set connection properties. <Key>:<Value> seperated by commas no spaces
+ -r <filename>                 specify results file
+ -rr <arg>                     specify/overide refresh rate for charts in secs
+ -rt <runtime>                 specify/overide run time for the benchmark. Value is in the form hh:mm.sec
+ -s                            run silent
+ -sr                           Suppress results file output
+ -stats <stats level>          specify level result stats detail (full or simple)
+ -u <username>                 override username in configuration file
+ -uc <user count>              override user count in configuration file.
+ -v <options>                  display run statistics (vmstat/sar like
+                               output), options include (comma separated
+                               no spaces).
+                               trans|cpu|disk|dml|errs|tpm|tps|users|resp|
+                               vresp|mmresp|tottx|trem|pool|dbtime|os
+ -ver                          display version and exit
+ -vo <verboseOutput>           output file for verbose output (defaults to stdout)
+ -wc                           wait until all session have disconnected FROM the database
+

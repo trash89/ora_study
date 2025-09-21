@@ -1,0 +1,257 @@
+https://gavinsoorma.com.au/knowledge-base/using-goldengate-12c-with-an-oracle-12c-multitenant-database/
+
+While in most ways, Oracle GoldenGate operates in a multitenant container database the same way that it operates in a regular Oracle database, 
+we will examine some of the main differences when it comes to configuring extract and replicat processes when they are connecting to a pluggable database.
+
+Remember that all PDBs or Pluggable Databases belonging to one single container database share the same redo stream. 
+So GoldenGate has to filter out the redo records for PDBs which it does not need. 
+At the same time each PDB has its own data dictionary so GoldenGate needs to track multiple data dictionaries.
+
+Here are some of the things to keep in mind when dealing with OGG and 12c multitenant architecture.
+
+- It is available only in integrated capture mode and not classic capture.
+
+- One extract can be configured to capture changes FROM multiple PDBs
+
+- Since we have to use integrated capture mode, a log mining server is involved and this is only accessible FROM the root container (CDB$ROOT).
+
+- We have to connect as a common user to attach to the log mining server. For example a user called C##GGADMIN is what we are using in our example.
+
+- There is a 3 part naming convention in GGSCI and Parameter file. For example Container Name.Schema.Table(or Sequence)
+
+- The parameter SOURCECATALOG when used enables us to use the earlier Schema.Table type naming convention.
+
+- Replicat can only connect and apply to one pluggable database.
+
+- The dbms_goldengate_auth.grant_admin_privilege package grants the appropriate privileges for capture and apply within a multitenant container database. 
+  This includes the container parameter, which must be set to ALL, as shown in the following example:
+  dbms_goldengate_auth.grant_admin_privilege(‘C##GGADMIN’,container=>all)
+
+-- on GoldenGate 12.3
+
+-- on source server (o12c)
+
+sqlplus / as sysdba << END
+alter session set container=pdb1;
+drop user scott cascade;
+create user scott identified by tiger default tablespace users;
+grant connect,resource,unlimited tablespace to scott;
+CREATE TABLE scott.myobjects as SELECT * FROM all_objects WHERE 0=1;
+create sequence scott.seq1 start with 1 increment by 1 nocycle;
+END
+
+-- on target server (o12c2)
+
+sqlplus / as sysdba << END
+alter session set container=pdb1;
+drop user scott cascade;
+create user scott identified by tiger default tablespace users;
+grant connect,resource,unlimited tablespace to scott;
+CREATE TABLE scott.myobjects as SELECT * FROM all_objects WHERE 0=1;
+create sequence scott.seq1 start with 1 increment by 1 nocycle;
+END
+
+
+
+-- Add supplemental logging for the SH schema
+-- Note: here we are connecting to the pluggable database pdb1
+
+-- on source server (o12c)
+
+cd $OGG_HOME
+ggsci
+
+GGSCI (o12c) 5> dblogin userid c##ggs_owner@o12c:1521/pdb1 password manager
+Successfully logged into database PDB1.
+
+GGSCI (o12c as c##ggs_owner@cdb1/PDB1) 6> ADD SCHEMATRANDATA SCOTT ALLCOLS
+
+-- Register the Integrated Extract
+-- Note: here we are connecting to the root container database.
+
+GGSCI (o12c as c##ggs_owner@cdb1/PDB1) 7> dblogin userid c##ggs_owner@o12c:1521/cdb1 password manager
+Successfully logged into database CDB$ROOT.
+
+-- Register the Extract process
+GGSCI (o12c as c##ggs_owner@cdb1/CDB$ROOT) 8> REGISTER EXTRACT ext1 DATABASE  CONTAINER (pdb1)
+025-02-27 09:09:17  INFO    OGG-02003  Extract EXT1 successfully registered with database at SCN 1052996.
+
+-- Create the Extract process
+GGSCI (o12c as c##ggs_owner@cdb1/CDB$ROOT) 12> ADD EXTRACT ext1 INTEGRATED TRANLOG, BEGIN NOW
+EXTRACT (Integrated) added.
+
+-- Create a local trail
+GGSCI (o12c as c##ggs_owner@cdb1/CDB$ROOT) 13> ADD EXTTRAIL /u01/app/oracle/product/gg/dirdat/lt, EXTRACT ext1
+EXTTRAIL added.
+
+-- Create the parameter file for the Primary Extract group
+EDIT PARAMS ext1
+
+EXTRACT ext1
+userid c##ggs_owner@o12c:1521/cdb1 password manager
+LOGALLSUPCOLS
+UPDATERECORDFORMAT COMPACT
+EXTTRAIL /u01/app/oracle/product/gg/dirdat/lt
+SOURCECATALOG pdb1
+TABLE SCOTT.*;
+SEQUENCE SCOTT.*;
+
+start extract ext1
+info extract ext1
+
+-- Create the DataPump process
+GGSCI (o12c as c##ggs_owner@cdb1/CDB$ROOT) 17> ADD EXTRACT extdp1 EXTTRAILSOURCE /u01/app/oracle/product/gg/dirdat/lt BEGIN NOW
+EXTRACT added.
+
+GGSCI (o12c as c##ggs_owner@cdb1/CDB$ROOT) 18> ADD RMTTRAIL /u01/app/oracle/product/gg/dirdat/rt EXTRACT extdp1
+RMTTRAIL added.
+
+edit params extdp1
+
+EXTRACT extdp1
+userid c##ggs_owner@o12c:1521/cdb1 password manager
+RMTHOST o12c2, MGRPORT 7809 
+RMTTRAIL /u01/app/oracle/product/gg/dirdat/rt
+SOURCECATALOG pdb1
+TABLE SCOTT.*;
+SEQUENCE SCOTT.*;
+
+start extract extdp1
+info extract extdp1
+
+
+Add the Replicat process group connected to the target PDB pdb1
+
+-- on target server (o12c2)
+
+cd $OGG_HOME
+ggsci
+
+GGSCI (o12c2) 6> dblogin userid c##ggs_owner@o12c2:1521/pdb1 password manager
+Successfully logged into database PDB1.
+
+GGSCI (o12c2 as c##ggs_owner@cdb1/PDB1) 7> ADD REPLICAT rep1 INTEGRATED EXTTRAIL /u01/app/oracle/product/gg/dirdat/rt
+REPLICAT (Integrated) added.
+
+edit params rep1
+
+REPLICAT rep1
+DBOPTIONS INTEGRATEDPARAMS(parallelism 2)
+userid c##ggs_owner@o12c2:1521/pdb1 password manager
+ASSUMETARGETDEFS
+MAP pdb1.SCOTT.*, TARGET pdb1.SCOTT.*;
+
+start replicat rep1
+info replicat rep1
+
+
+
+-- Test
+
+-- initial 
+
+-- on source server (o12c)
+
+o12c:PDB1:cdb1:SYS
+SQL> SELECT count(*) FROM scott.myobjects;
+
+  COUNT(*)
+----------
+	 0
+o12c:PDB1:cdb1:SYS
+SQL> SELECT scott.seq1.nextval FROM dual;
+
+   NEXTVAL
+----------
+	 1
+
+o12c:PDB1:cdb1:SYS
+SQL> SELECT scott.seq1.currval FROM dual;
+
+   CURRVAL
+----------
+	 1
+
+
+-- on target server (o12c2)
+
+o12c2:PDB1:cdb1:SYS
+SQL> SELECT count(*) FROM scott.myobjects;
+
+  COUNT(*)
+----------
+	 0
+
+o12c2:PDB1:cdb1:SYS
+SQL> SELECT scott.seq1.nextval FROM dual;
+
+   NEXTVAL
+----------
+	 1
+
+o12c2:PDB1:cdb1:SYS
+SQL> SELECT scott.seq1.currval FROM dual;
+
+   CURRVAL
+----------
+	 1
+
+-- make some changes on the primary server (o12c)
+
+o12c:PDB1:cdb1:SYS
+SQL> insert into scott.myobjects SELECT * FROM all_objects;
+
+21301 rows created.
+
+o12c:PDB1:cdb1:SYS
+SQL> commit;
+
+Commit complete.
+
+o12c:PDB1:cdb1:SYS
+SQL> SELECT scott.seq1.nextval FROM dual;
+
+   NEXTVAL
+----------
+	22
+
+o12c:PDB1:cdb1:SYS
+SQL> SELECT scott.seq1.currval FROM dual;
+
+   CURRVAL
+----------
+	22
+
+-- on the target server (o12c2), we have:
+
+o12c2:PDB1:cdb1:SYS
+SQL> SELECT count(*) FROM scott.myobjects;
+
+  COUNT(*)
+----------
+     21301
+
+o12c2:PDB1:cdb1:SYS
+SQL> SELECT scott.seq1.currval FROM dual;
+
+   CURRVAL
+----------
+	22
+
+
+
+-- stopping and deleting
+
+-- on source server (o11g)
+dblogin userid c##ggs_owner@o12c:1521/cdb1 password manager
+stop extract ext1
+delete extract ext1
+
+stop extract extdp1
+delete extract extdp1
+
+
+-- on target server (o11g2)
+dblogin userid c##ggs_owner@o12c2:1521/cdb1 password manager
+stop replicat rep1
+delete replicat rep1

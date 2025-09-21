@@ -1,0 +1,114 @@
+
+-- on GoldenGate 23ai for PostgreSQL
+
+-- on source server (pg1)
+
+psql << END
+\c test
+drop schema source_sch cascade;
+create schema source_sch;
+create table source_sch.tab1(id numeric,name text);
+insert into source_sch.tab1 values(1,'aaa');
+insert into source_sch.tab1 values(2,'bbb');
+insert into source_sch.tab1 values(3,'ccc');
+create sequence source_sch.seq1 start with 1 increment by 1;
+END
+
+-- on target server (pg2)  -- just the table, without data
+psql << END
+\c test
+create schema target_sch;
+create table target_sch.tab1(id numeric,name text);
+create sequence target_sch.seq1 start with 1 increment by 1;
+END
+
+
+-- on source server (pg1)
+
+-- Create the Initial data extract process load1
+adminclient
+connect http://pg1:5001 as ggma
+
+dblogin USERIDALIAS ggs_owner_alias
+
+ADD EXTRACT ext1, SOURCEISTABLE
+
+-- Create the parameter file for the extract group load1
+EDIT PARAMS ext1
+
+EXTRACT ext1
+USERIDALIAS ggs_owner_alias, DOMAIN OracleGoldenGate
+EXTFILE lt ,  PURGE
+TABLE source_sch.*;
+
+start extract ext1
+info extract ext1
+view report ext1
+
+alter credentialstore add user ggma alias ggma_alias domain Network password slayer
+
+ADD DISTPATH ltrt SOURCE trail://pg1:5003/services/v2/sources?trail=lt target ws://pg2:5004/services/v2/targets?trail=rt authentication useridalias ggma_alias domain Network
+
+-- on target server (pg2)
+
+-- Create the initial data load task rep1
+
+adminclient
+connect http://pg2:5001 as ggma
+
+ADD REPLICAT rep1, EXTTRAIL rt
+
+-- Create the parameter file for the Replicat group, load2
+EDIT PARAMS rep1
+
+REPLICAT rep1
+useridalias ggs_owner_alias
+ASSUMETARGETDEFS
+MAP source_sch.*, TARGET target_sch.*;
+
+
+-- on source server (pg1)
+
+-- Start the initial load data extract task on the source system
+start extract ext1
+info extract ext1
+view report ext1
+
+START DISTPATH ltrt
+info distpath ltrt
+
+-- on target server (pg2)
+
+start replicat rep1
+info replicat rep1
+view report rep1
+
+postgres@[local]:5432/postgres=# \c test
+You are now connected to database "test" as user "postgres".
+postgres@[local]:5432/test=# SELECT count(*) FROM target_sch.tab1;
+ count 
+-------
+     3
+(1 row)
+
+postgres@[local]:5432/test=# SELECT * FROM target_sch.tab1;
+ id | name 
+----+------
+  1 | aaa
+  2 | bbb
+  3 | ccc
+(3 rows)
+
+-- stopping and deleting
+
+-- on source server (pg1)
+dblogin USERIDALIAS ggs_owner_alias
+stop extract ext1
+delete extract ext1
+stop distpath ltrt
+delete distpath ltrt
+
+-- on target server (pg2)
+dblogin USERIDALIAS ggs_owner_alias
+stop replicat rep1
+delete replicat rep1

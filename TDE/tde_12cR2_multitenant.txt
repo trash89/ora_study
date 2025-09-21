@@ -1,0 +1,522 @@
+export TNS_ADMIN=$ORACLE_HOME/network/admin 
+
+sqlplus / as sysdba << END
+alter system set "_db_discard_lost_masterkey"=true scope=spfile sid='*';
+END
+
+mkdir -p $ORACLE_BASE/admin/$ORACLE_SID/encryption_keystore/
+
+vi $ORACLE_HOME/network/admin/sqlnet.ora
+
+ENCRYPTION_WALLET_LOCATION=
+  (SOURCE=(METHOD=FILE)(METHOD_DATA=
+    (DIRECTORY=/u01/app/oracle/admin/cdb1/encryption_keystore/)))
+
+
+lsnrctl stop
+lsnrctl start
+
+sqlplus / as sysdba <<END
+shutdown immediate;
+startup;
+END
+
+sqlplus / as sysdba
+
+@show_tde
+v$encryption_wallet
+Con STATUS			   WRL_TYPE		WALLET_TYPE	     W order   Backuped  WRL_PARAMETER
+--- ------------------------------ -------------------- -------------------- --------- --------- --------------------------------------------------------------------------------
+  1 NOT_AVAILABLE		   FILE 		UNKNOWN 	     SINGLE    UNDEFINED /u01/app/oracle/admin/cdb1/encryption_keystore/
+
+no rows SELECTed
+
+
+sys.x$kcbdbk, if mkloc == 0, no encryption enabled
+Con	 MKLOC
+--- ----------
+  1	     0
+  2	     0
+  3	     0
+
+ADMINISTER KEY MANAGEMENT CREATE KEYSTORE '/u01/app/oracle/admin/cdb1/encryption_keystore/' IDENTIFIED BY myPassword;
+host ls $ORACLE_BASE/admin/$ORACLE_SID/encryption_keystore/
+ewallet.p12
+
+@show_tde
+v$encryption_wallet
+Con STATUS			   WRL_TYPE		WALLET_TYPE	     W order   Backuped  WRL_PARAMETER
+--- ------------------------------ -------------------- -------------------- --------- --------- --------------------------------------------------------------------------------
+  1 CLOSED			   FILE 		UNKNOWN 	     SINGLE    UNDEFINED /u01/app/oracle/admin/cdb1/encryption_keystore/
+
+no rows SELECTed
+
+
+sys.x$kcbdbk, if mkloc == 0, no encryption enabled
+Con	 MKLOC
+--- ----------
+  1	     0
+  2	     0
+  3	     0
+
+
+-- Open the key store by specifying the password.
+ADMINISTER KEY MANAGEMENT SET KEYSTORE OPEN IDENTIFIED BY myPassword container=all;
+
+@show_tde
+v$encryption_wallet
+Con STATUS			   WRL_TYPE		WALLET_TYPE	     W order   Backuped  WRL_PARAMETER
+--- ------------------------------ -------------------- -------------------- --------- --------- --------------------------------------------------------------------------------
+  1 OPEN_NO_MASTER_KEY		   FILE 		PASSWORD	     SINGLE    UNDEFINED /u01/app/oracle/admin/cdb1/encryption_keystore/
+
+no rows SELECTed
+
+
+sys.x$kcbdbk, if mkloc == 0, no encryption enabled
+Con	 MKLOC
+--- ----------
+  1	     0
+  2	     0
+  3	     0
+
+
+-- Close wallet
+ADMINISTER KEY MANAGEMENT SET KEYSTORE CLOSE CONTAINER=ALL;
+
+-- Set the master key
+ADMINISTER KEY MANAGEMENT SET KEY USING TAG 'first master key cdb' IDENTIFIED BY myPassword WITH BACKUP USING 'backup before master cdb' container=all;
+host ls $ORACLE_BASE/admin/$ORACLE_SID/encryption_keystore/
+'ewallet_2025020607244267_backup before master cdb.p12'   ewallet.p12
+
+@show_tde
+v$encryption_wallet
+Con STATUS			   WRL_TYPE		WALLET_TYPE	     W order   Backuped  WRL_PARAMETER
+--- ------------------------------ -------------------- -------------------- --------- --------- --------------------------------------------------------------------------------
+  1 OPEN			   FILE 		PASSWORD	     SINGLE    NO	 /u01/app/oracle/admin/cdb1/encryption_keystore/
+
+v$encryption_keys
+Con KEY_ID								   TAG				  USER				 KEY_USE    KEYSTORE_TYPE     BACKED_UP
+--- ---------------------------------------------------------------------- ------------------------------ ------------------------------ ---------- ----------------- ---------
+  1 AWXtVo2wuE9ZvzL+hi8iZooAAAAAAAAAAAAAAAAAAAAAAAAAAAAA		   first master key cdb 	  SYS				 TDE IN PDB SOFTWARE KEYSTORE NO
+  3 ASbUqdeoFk96vw1B7AP7e/8AAAAAAAAAAAAAAAAAAAAAAAAAAAAA		   first master key cdb 	  SYS				 TDE IN PDB SOFTWARE KEYSTORE NO
+
+Creation Time	    Activation Time	Creator:DBNAME/PDBNAME				   Activating:DBNAME/PDBNAME
+------------------- ------------------- -------------------------------------------------- --------------------------------------------------
+06/02/2025 08:24:42 06/02/2025 08:24:42 cdb1/CDB$ROOT					   cdb1/CDB$ROOT
+06/02/2025 08:24:42 06/02/2025 08:24:42 cdb1/PDB1					   cdb1/PDB1
+
+2 rows SELECTed.
+
+
+sys.x$kcbdbk, if mkloc == 0, no encryption enabled
+Con	 MKLOC
+--- ----------
+  1	     1
+  2	     0
+  3	     1
+
+alter session set container=pdb1;
+
+CREATE TABLESPACE encrypted_ts DATAFILE '/u02/oradata/cdb1/pdb1/encrypted_ts01.dbf' SIZE 1M
+AUTOEXTEND ON NEXT 1M ENCRYPTION USING 'AES256' DEFAULT STORAGE(ENCRYPT);
+  
+CREATE USER test IDENTIFIED BY test DEFAULT TABLESPACE encrypted_ts;
+ALTER USER test QUOTA UNLIMITED ON encrypted_ts;
+GRANT CONNECT TO test;
+GRANT CREATE TABLE TO test;
+
+conn test/test@pdb1
+
+DROP TABLE tde_test;
+PURGE RECYCLEBIN;
+
+CREATE TABLE tde_test (
+  id    NUMBER(10),
+  data  VARCHAR2(50) ENCRYPT
+)
+TABLESPACE encrypted_ts;
+
+INSERT INTO tde_test (id, data) VALUES (1, 'This is a secret!');
+COMMIT;
+
+
+conn / as sysdba
+alter session set container=cdb$root;
+
+ALTER SYSTEM FLUSH BUFFER_CACHE;
+
+shutdown immediate;
+startup;
+
+ADMINISTER KEY MANAGEMENT SET KEYSTORE OPEN IDENTIFIED BY myPassword container=all;
+
+conn test/test@pdb1
+SELECT * FROM test.tde_test;
+SQL> 
+	ID DATA
+---------- --------------------------------------------------
+	 1 This is a secret!
+
+1 row SELECTed.
+
+
+conn test/test@pdb1
+rem if this error, open the keystore in the pdb
+SQL> SELECT * FROM test.tde_test;
+SELECT * FROM test.tde_test
+                   *
+ERROR at line 1:
+ORA-28365: wallet is not open
+
+conn sys/manager@pdb1 as sysdba
+ADMINISTER KEY MANAGEMENT SET KEYSTORE OPEN IDENTIFIED BY mypassword;
+
+conn test/test@pdb1
+SELECT * FROM test.tde_test;
+SQL> 
+	ID DATA
+---------- --------------------------------------------------
+	 1 This is a secret!
+
+1 row SELECTed.
+
+
+
+
+-- Create autologin for the key store.
+sqlplus / as sysdba
+
+ADMINISTER KEY MANAGEMENT CREATE AUTO_LOGIN KEYSTORE FROM KEYSTORE '/u01/app/oracle/admin/cdb1/encryption_keystore/' IDENTIFIED BY myPassword;
+
+host ls $ORACLE_BASE/admin/$ORACLE_SID/encryption_keystore/
+  cwallet.sso  'ewallet_2025020607244267_backup before master cdb.p12'   ewallet.p12
+
+
+shutdown immediate;
+startup;
+
+@show_tde
+v$encryption_wallet
+Con STATUS			   WRL_TYPE		WALLET_TYPE	     W order   Backuped  WRL_PARAMETER
+--- ------------------------------ -------------------- -------------------- --------- --------- --------------------------------------------------------------------------------
+  1 OPEN			   FILE 		AUTOLOGIN	     SINGLE    NO	 /u01/app/oracle/admin/cdb1/encryption_keystore/
+
+v$encryption_keys
+Con KEY_ID								   TAG				  USER				 KEY_USE    KEYSTORE_TYPE     BACKED_UP
+--- ---------------------------------------------------------------------- ------------------------------ ------------------------------ ---------- ----------------- ---------
+  1 AWXtVo2wuE9ZvzL+hi8iZooAAAAAAAAAAAAAAAAAAAAAAAAAAAAA		   first master key cdb 	  SYS				 TDE IN PDB SOFTWARE KEYSTORE NO
+  3 ASbUqdeoFk96vw1B7AP7e/8AAAAAAAAAAAAAAAAAAAAAAAAAAAAA		   first master key cdb 	  SYS				 TDE IN PDB SOFTWARE KEYSTORE NO
+
+Creation Time	    Activation Time	Creator:DBNAME/PDBNAME				   Activating:DBNAME/PDBNAME
+------------------- ------------------- -------------------------------------------------- --------------------------------------------------
+06/02/2025 08:24:42 06/02/2025 08:24:42 cdb1/CDB$ROOT					   cdb1/CDB$ROOT
+06/02/2025 08:24:42 06/02/2025 08:24:42 cdb1/PDB1					   cdb1/PDB1
+
+2 rows SELECTed.
+
+
+sys.x$kcbdbk, if mkloc == 0, no encryption enabled
+Con	 MKLOC
+--- ----------
+  1	     1
+  2	     0
+  3	     1
+
+conn / as sysdba
+alter session set container=cdb$root;
+ALTER SYSTEM FLUSH BUFFER_CACHE;
+
+shutdown immediate;
+startup;
+
+conn test/test@pdb1
+SELECT * FROM test.tde_test;
+SQL> 
+	ID DATA
+---------- --------------------------------------------------
+	 1 This is a secret!
+
+1 row SELECTed.
+
+
+-- Change Keystore Password
+-- Key store password could be changed by specifying the old password and the new password.
+conn / as sysdba
+
+ADMINISTER KEY MANAGEMENT ALTER KEYSTORE PASSWORD FORCE KEYSTORE 
+IDENTIFIED BY myPassword --old password
+SET myPassword123  -- new password
+WITH BACKUP USING 'pwd_change';
+host ls -lrt $ORACLE_BASE/admin/$ORACLE_SID/encryption_keystore/
+-rw------- 1 oracle oinstall 2408 Feb  6 08:24 'ewallet_2025020607244267_backup before master cdb.p12'
+-rw------- 1 oracle oinstall 5704 Feb  6 08:31  ewallet_2025020607314682_pwd_change.p12
+-rw------- 1 oracle oinstall 5704 Feb  6 08:31  ewallet.p12
+-rw------- 1 oracle oinstall 5747 Feb  6 08:31  cwallet.sso
+
+-- done in clone
+Duplicate database with encrypted tablespaces
+scp /path/ewallet.p12 oracle@172.16.180.12:/path/ewallet.p12
+ewallet.p12
+startup nomount pfile=/u01/app/oracle/rman/initclonedb.ora force
+ORACLE instance started.
+administer key management set keystore open identified by manager;
+keystore altered.
+if ORA-28365: wallet is not open   :
+startup nomount pfile=/u01/app/oracle/rman/initclonedb.ora force
+administer key management set keystore open identified by manager;
+keystore altered.
+administer key management create local auto_login keystore FROM keystore '/u01/app/oracle/admin/wallets/clonedb/' identified by manager;
+keystore altered.
+
+
+
+
+conn / as sysdba
+ALTER PLUGGABLE DATABASE pdb1 CLOSE;
+
+SQL> ALTER PLUGGABLE DATABASE pdb1 UNPLUG INTO '/tmp/pdb1.xml';
+ALTER PLUGGABLE DATABASE pdb1 UNPLUG INTO '/tmp/pdb1.xml'
+*
+ERROR at line 1:
+ORA-46680: master keys of the container database must be exported
+
+conn / as sysdba
+ALTER PLUGGABLE DATABASE pdb1 open read write;
+alter session set container=pdb1;
+ADMINISTER KEY MANAGEMENT EXPORT ENCRYPTION KEYS WITH SECRET "mySecret" TO '/tmp/export_pdb1.p12' force keystore IDENTIFIED BY myPassword;
+
+alter session set container=cdb$root;
+ALTER PLUGGABLE DATABASE pdb1 CLOSE;
+ALTER PLUGGABLE DATABASE pdb1 UNPLUG INTO '/tmp/pdb1.xml';
+drop pluggable database pdb1 keep datafiles;
+
+create pluggable database pdb1 as clone using '/tmp/pdb1.xml' nocopy;
+alter pluggable database pdb1 open read write;
+
+alter session set container=pdb1;
+ADMINISTER KEY MANAGEMENT IMPORT ENCRYPTION KEYS WITH SECRET "mySecret" FROM '/tmp/export_pdb1.p12' force keystore IDENTIFIED BY myPassword WITH BACKUP;
+
+alter session set container=cdb$root;
+ALTER PLUGGABLE DATABASE pdb1 CLOSE;
+ALTER PLUGGABLE DATABASE pdb1 open read write;
+ALTER PLUGGABLE DATABASE pdb1 save state;
+
+
+Data Pump Export and Import with Encryption
+
+Exporting
+Even when TDE is setup if encryption parameters are not used in expdp, the resulting dump file will be unencrypted.
+expdp system/manager@pdb1 directory=DATA_PUMP_DIR dumpfile=test.dmp schemas=test
+
+strings /u01/app/oracle/admin/cdb1/dpdump/2D75468DEB28127DE0636501A8C05F01/test.dmp | grep secret*
+This is a secret!
+
+To encrypt an export use encryption_mode and encryption paramters.
+expdp system/manager@pdb1 directory=DATA_PUMP_DIR dumpfile=test2.dmp schemas=test ENCRYPTION_MODE=TRANSPARENT ENCRYPTION=all
+The resulting dump file is encrypted.
+strings /u01/app/oracle/admin/cdb1/dpdump/2D75468DEB28127DE0636501A8C05F01/test2.dmp | grep secret*
+
+sqlplus / as sysdba
+alter session set container=pdb1;
+drop user test cascade;
+exit
+
+Importing
+To import FROM an encrypted, simply run the import command as usual provided TDE is setup and wallet is open.
+impdp system/manager@pdb1 directory=DATA_PUMP_DIR dumpfile=test2.dmp schemas=test
+
+
+RMAN Backup with Encryption
+There are multiple ways to enable encryption for backups. The easiest and simplest way is to configure default rman configuration to use encryption.
+CONFIGURE ENCRYPTION FOR DATABASE ON;
+CONFIGURE ENCRYPTION ALGORITHM 'AES256';
+This will make every backup run an ecnrypted backup.
+RMAN> backup datafile 18 tag='default backup';
+
+TAG                              ENC
+-------------------------------- ---
+DEFAULT BACKUP                   YES
+This could be overriden with set encryption.
+RMAN> set encryption off;
+RMAN> backup datafile 18 tag='enc off';
+
+TAG                              ENC
+-------------------------------- ---
+ENC OFF                          NO
+If an tablespace is already encrypted and backup taken is an encrypted backup then the encrypted blocks are passed through to backup unchnaged. 
+Only the unencrypted blocks are encrypted during backup.
+
+
+Rekeying Master key
+Rekeying master key may be needed as part of regulatory compliance or if it's suspected the master key is compromised. 
+Rekeying creates a new master key and activates it. If the DB is part of a data guard configuration then rekeying will stop the redo apply 
+until new key is available on the standby. Considering this and below points before rekeying.
+1. Before rekeying is attempted verify that tablespaces are not under going an online rekeying themselves. 
+If the status is REKEYING instead of NORMAL then do not attempt rekeying master key until tablespace rekeying completes.
+SQL> SELECT TS#,ENCRYPTIONALG,STATUS FROM V$ENCRYPTED_TABLESPACES;
+
+       TS# ENCRYPT STATUS
+---------- ------- ----------
+      	 5 AES256  NORMAL
+2. Use "SET KEY" to rekey a new master key.
+ADMINISTER KEY MANAGEMENT SET KEY using tag 'new key' FORCE KEYSTORE IDENTIFIED BY myPassword WITH BACKUP USING 'new key backup' container=all;
+host ls -lrt $ORACLE_BASE/admin/$ORACLE_SID/encryption_keystore/
+-rw------- 1 oracle oinstall 2408 Feb  6 08:24 'ewallet_2025020607244267_backup before master cdb.p12'
+-rw------- 1 oracle oinstall 5704 Feb  6 08:31  ewallet_2025020607314682_pwd_change.p12
+-rw------- 1 oracle oinstall 5704 Feb  6 08:32 'ewallet_2025020607322925_pwd_change back.p12'
+-rw------- 1 oracle oinstall 5704 Feb  6 08:35  ewallet_2025020607352423.p12
+-rw------- 1 oracle oinstall 5912 Feb  6 08:41 'ewallet_2025020607410091_new key backup.p12'
+-rw------- 1 oracle oinstall 8792 Feb  6 08:41  ewallet.p12
+-rw------- 1 oracle oinstall 8835 Feb  6 08:41  cwallet.sso
+
+3. Verify the new key is added.
+v$encryption_wallet
+Con STATUS			   WRL_TYPE		WALLET_TYPE	     W order   Backuped  Mode	  WRL_PARAMETER
+--- ------------------------------ -------------------- -------------------- --------- --------- -------- --------------------------------------------------------------------------------
+  1 OPEN			   FILE 		AUTOLOGIN	     SINGLE    NO	 NONE	  /u01/app/oracle/admin/cdb1/encryption_keystore/tde/
+  2 OPEN			   FILE 		AUTOLOGIN	     SINGLE    NO	 UNITED
+  4 OPEN			   FILE 		AUTOLOGIN	     SINGLE    NO	 UNITED
+
+v$encryption_wallet
+Con STATUS			   WRL_TYPE		WALLET_TYPE	     W order   Backuped  WRL_PARAMETER
+--- ------------------------------ -------------------- -------------------- --------- --------- --------------------------------------------------------------------------------
+  1 OPEN			   FILE 		AUTOLOGIN	     SINGLE    NO	 /u01/app/oracle/admin/cdb1/encryption_keystore/
+
+v$encryption_keys
+Con KEY_ID								   TAG				  USER				 KEY_USE    KEYSTORE_TYPE     BACKED_UP
+--- ---------------------------------------------------------------------- ------------------------------ ------------------------------ ---------- ----------------- ---------
+  1 ATWozoySZ0/Jv/ynfu0s3FcAAAAAAAAAAAAAAAAAAAAAAAAAAAAA		   new key			  SYS				 TDE IN PDB SOFTWARE KEYSTORE NO
+  1 AWXtVo2wuE9ZvzL+hi8iZooAAAAAAAAAAAAAAAAAAAAAAAAAAAAA		   first master key cdb 	  SYS				 TDE IN PDB SOFTWARE KEYSTORE YES
+  3 ASbUqdeoFk96vw1B7AP7e/8AAAAAAAAAAAAAAAAAAAAAAAAAAAAA		   first master key cdb 	  SYS				 TDE IN PDB SOFTWARE KEYSTORE YES
+  4 AYSxthm2bE9kv/PxIQD6ltUAAAAAAAAAAAAAAAAAAAAAAAAAAAAA		   new key			  SYS				 TDE IN PDB SOFTWARE KEYSTORE NO
+
+Creation Time	    Activation Time	Creator:DBNAME/PDBNAME				   Activating:DBNAME/PDBNAME
+------------------- ------------------- -------------------------------------------------- --------------------------------------------------
+06/02/2025 08:41:00 06/02/2025 08:41:01 cdb1/CDB$ROOT					   cdb1/CDB$ROOT
+06/02/2025 08:24:42 06/02/2025 08:24:42 cdb1/CDB$ROOT					   cdb1/CDB$ROOT
+06/02/2025 08:24:42 06/02/2025 08:24:42 cdb1/PDB1					   cdb1/PDB1
+06/02/2025 08:41:01 06/02/2025 08:41:01 cdb1/PDB1					   cdb1/PDB1
+
+4 rows SELECTed.
+
+
+sys.x$kcbdbk, if mkloc == 0, no encryption enabled
+Con	 MKLOC
+--- ----------
+  1	     1
+  2	     0
+  4	     1
+
+Backup Keystore
+
+Backup the key store with the following command. Optionally a backup tag could be specified.
+ADMINISTER KEY MANAGEMENT BACKUP KEYSTORE USING 'backup_tag' FORCE KEYSTORE IDENTIFIED BY myPassword;
+
+The backup file will have the backup tag appended to the file name
+host ls -lrt $ORACLE_BASE/admin/$ORACLE_SID/encryption_keystore/
+-rw------- 1 oracle oinstall 2408 Feb  6 08:24 'ewallet_2025020607244267_backup before master cdb.p12'
+-rw------- 1 oracle oinstall 5704 Feb  6 08:31  ewallet_2025020607314682_pwd_change.p12
+-rw------- 1 oracle oinstall 5704 Feb  6 08:32 'ewallet_2025020607322925_pwd_change back.p12'
+-rw------- 1 oracle oinstall 5704 Feb  6 08:35  ewallet_2025020607352423.p12
+-rw------- 1 oracle oinstall 5912 Feb  6 08:41 'ewallet_2025020607410091_new key backup.p12'
+-rw------- 1 oracle oinstall 8792 Feb  6 08:42  ewallet_2025020607422258_backup_tag.p12
+-rw------- 1 oracle oinstall 8792 Feb  6 08:42  ewallet.p12
+-rw------- 1 oracle oinstall 8835 Feb  6 08:42  cwallet.sso
+
+If backing up to a specific location then specify the backup location with "TO".
+ADMINISTER KEY MANAGEMENT BACKUP KEYSTORE USING 'backup_tag' FORCE KEYSTORE IDENTIFIED BY myPassword TO '/home/oracle';
+host ls -lrt /home/oracle
+-rw------- 1 oracle oinstall 8792 Feb  6 08:43 ewallet_2025020607431068_backup_tag.p12
+
+-- referrence
+administer key management set key identified by "manager" with backup;
+administer key management create AUTO_LOGIN keystore FROM keystore '/u01/app/oracle/admin/cdb1/wallet/tde' identified by "manager" ;
+ADMINISTER KEY MANAGEMENT ALTER KEYSTORE PASSWORD IDENTIFIED BY "manager" SET "manager1" WITH BACKUP ;
+ADMINISTER KEY MANAGEMENT ALTER KEYSTORE PASSWORD IDENTIFIED BY "manager1" SET "manager" WITH BACKUP ;
+
+administer key management set keystore open force keystore identified by "manager" container=all;
+ADMINISTER KEY MANAGEMENT EXPORT ENCRYPTION KEYS WITH SECRET "manager" TO '/home/oracle/temp/export.p12' IDENTIFIED BY manager;
+ADMINISTER KEY MANAGEMENT EXPORT ENCRYPTION KEYS WITH SECRET "manager" TO '/home/oracle/temp/exportpdb.p12' IDENTIFIED BY manager;
+-- referrence
+
+ADMINISTER KEY MANAGEMENT ALTER KEYSTORE PASSWORD FORCE KEYSTORE 
+IDENTIFIED BY manager1 --old password
+SET manager  -- new password
+WITH BACKUP USING 'pwd_change';
+
+
+
+
+
+
+
+
+----------------------------------------------------------------------------------------------------------------------------------------------------------------
+Check the wallet : issue OPEN_NO_MASTER_KEY
+Create Tablespace Error : ORA-28361: master key not yet set
+
+SQL> SELECT * FROM v$encryption_wallet;
+
+   INST_ID WRL_TYPE             WRL_PARAMETER                            STATUS                         WALLET_TYPE          WALLET_OR KEYSTORE FULLY_BAC     CON_ID
+---------- -------------------- ---------------------------------------- ------------------------------ -------------------- --------- -------- --------- ----------
+         1 FILE                                                          OPEN_NO_MASTER_KEY              AUTOLOGIN            SINGLE    UNITED   NO                 4
+
+SQL> administer key management create encryption key using tag 'bigbd_key' force keystore identified by "Welcome1#" with backup using 'bigbd_rekey';
+
+keystore altered.
+
+SQL> SELECT key_id FROM v$encryption_keys WHERE tag='bigbd_key';
+
+KEY_ID
+------------------------------------------------------------------------------
+AYA+KPWPME/6v8PY0PLs/UYAAAAAAAAAAAAAAAAAAAAAAAAAAAAA
+
+SQL> administer key management use encryption key 'AYA+KPWPME/6v8PY0PLs/UYAAAAAAAAAAAAAAAAAAAAAAAAAAAAA' force keystore identified by "Password#" with backup;
+
+keystore altered.
+----------------------------------------------------------------------------------------------------------------------------------------------------------------
+
+
+------------------------------------------------------------------------------------------------------------------------------------------------------------------------
+https://smarttechways.com/2019/08/02/ora-28417-password-based-keystore-is-not-open/
+
+ORA-28417: password-based keystore is not open
+We need to change master key value in TDE enabled database in DB version 12c.
+The command to reset the master encryption key in 12c is:
+SQL>ADMINISTER KEY MANAGEMENT SET KEY IDENTIFIED BY keystore_password WITH BACKUP;
+
+Error:
+During execition of statement getting the following error.
+
+SQL> ADMINISTER KEY MANAGEMENT SET KEY IDENTIFIED BY WITH BACKUP;
+ADMINISTER KEY MANAGEMENT SET KEY IDENTIFIED BY "******" WITH BACKUP
+*
+ERROR at line 1:
+ORA-28417: password-based keystore is not open
+
+Caused
+Auto login wallet is created before the master key added.
+
+Solution:
+1. Rename the file cwallet.sso for remove the auto-open wallet
+
+mv cwallet.sso cwallet.sso.bkp
+
+2. Close the auto login wallet:
+
+administer key management set keystore close;
+
+3. Then try to open the wallet with password.
+
+administer key management set keystore open identified by 'wallet_password' ;
+administer key management set key identified by 'wallet_password' with backup;
+
+4. Re-enable the auto login
+
+administer key management create AUTO_LOGIN keystore FROM keystore 'wallet directory' identified by 'wallet_password' ;
+
+Change the password of Wallet
+
+ADMINISTER KEY MANAGEMENT ALTER KEYSTORE PASSWORD IDENTIFIED BY 'old password' SET 'new password' WITH BACKUP ;
+------------------------------------------------------------------------------------------------------------------------------------------------------------------------
+

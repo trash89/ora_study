@@ -1,0 +1,572 @@
+-- oracle 12cR2
+
+-- Online Operations
+
+ALTER TABLE table-name DROP CONSTRAINT contraint-name ONLINE;
+ALTER TABLE table-name SET UNUSED (column-list) ONLINE;
+DROP INDEX index-name ONLINE;
+ALTER INDEX index-name UNUSABLE ONLINE;
+ALTER TABLE table_name MOVE PARTITION partition-name ONLINE ...;
+ALTER TABLE table_name MOVE SUBPARTITION partition-name ONLINE ...;
+The following operations are non-blocking without the ONLINE keyword.
+
+ALTER INDEX index-name INVISIBLE;
+ALTER INDEX index-name VISIBLE;
+
+
+-- 12cR1: online datafile moving : ALTER DATABASE MOVE DATAFILE 
+ALTER DATABASE MOVE DATAFILE '/u02/oradata/cdb1/pdb1/example01.dbf' TO '/tmp/example01.dbf';
+ALTER DATABASE MOVE DATAFILE '/tmp/example01.dbf' TO '/u02/oradata/cdb1/pdb1/example01.dbf';
+
+-- ALTER TABLE MOVE ONLINE UPDATE INDEXES PARALLEL
+alter table SH.CHANNELS move tablespace sh online update indexes parallel 2
+
+alter table scott.dept modify default attributes tablespace users;
+alter table scott.emp modify default attributes tablespace users;
+
+alter index SCOTT.PK_DEPT   rebuild tablespace users parallel 2 online;
+
+-- ALTER TABLE MOVE PARTITION ONLINE UPDATE INDEXES PARALLEL
+alter table SCOTT.DEPT      move partition P_10         tablespace users online update indexes parallel 2;
+alter index SCOTT.EMP_IDX   rebuild partition P_10      tablespace users online parallel 2;
+
+-- ALTER TABLE MOVE LOB ONLINE UPDATE INDEXES PARALLEL
+alter table SCOTT.TEST_LOB move lob (AWLOB) store as ( tablespace users) online update indexes parallel 2;
+
+-- reorg user SCOTT
+
+create tablespace scott_data datafile   '/u02/oradata/cdb1/pdb1/scott_data01.dbf'   size 1m autoextend on next 1m;
+create tablespace scott_indx datafile   '/u02/oradata/cdb1/pdb1/scott_indx01.dbf'   size 1m autoextend on next 1m;
+create tablespace scott_lob datafile    '/u02/oradata/cdb1/pdb1/scott_lob01.dbf'    size 1m autoextend on next 1m;
+alter user scott default tablespace scott_data;
+
+
+alter table SCOTT.DUMMY     move tablespace scott_data online update indexes parallel 2;
+alter table SCOTT.SALGRADE  move tablespace scott_data online update indexes parallel 2;
+
+alter table SCOTT.DEPT  move partition P_10         tablespace scott_data online update indexes parallel 2;
+alter table SCOTT.DEPT  move partition P_20         tablespace scott_data online update indexes parallel 2;
+alter table SCOTT.DEPT  move partition P_30         tablespace scott_data online update indexes parallel 2;
+alter table SCOTT.DEPT  move partition P_40         tablespace scott_data online update indexes parallel 2;
+alter table SCOTT.DEPT  move partition P_OTHERS     tablespace scott_data online update indexes parallel 2;
+alter table SCOTT.EMP   move partition P_10         tablespace scott_data online update indexes parallel 2;
+alter table SCOTT.EMP   move partition P_20         tablespace scott_data online update indexes parallel 2;
+alter table SCOTT.EMP   move partition P_30         tablespace scott_data online update indexes parallel 2;
+alter table SCOTT.EMP   move partition P_40         tablespace scott_data online update indexes parallel 2;
+alter table SCOTT.EMP   move partition P_OTHERS     tablespace scott_data online update indexes parallel 2;
+
+alter table scott.dept  modify default attributes tablespace scott_data;
+alter table scott.emp   modify default attributes tablespace scott_data;
+
+
+-- non partitioned indexes
+alter index SCOTT.PK_DEPT   rebuild tablespace scott_indx parallel 2 online;
+alter index SCOTT.PK_EMP    rebuild tablespace scott_indx parallel 2 online;
+
+-- rebuild partitioned indexes
+alter index SCOTT.EMP_IDX rebuild partition P_10        tablespace scott_indx parallel 2 online;
+alter index SCOTT.EMP_IDX rebuild partition P_20        tablespace scott_indx parallel 2 online;
+alter index SCOTT.EMP_IDX rebuild partition P_30        tablespace scott_indx parallel 2 online;
+alter index SCOTT.EMP_IDX rebuild partition P_40        tablespace scott_indx parallel 2 online;
+alter index SCOTT.EMP_IDX rebuild partition P_OTHERS    tablespace scott_indx parallel 2 online;
+
+alter table SCOTT.TEST_LOB move tablespace scott_data;
+-- with PARALLEL , session crash end of file or communication channel
+alter table SCOTT.TEST_LOB move tablespace scott_data parallel 2;
+alter table SCOTT.TEST_LOB move lob (AWLOB) store as ( tablespace scott_lob) parallel 2;
+
+
+-- reorg user SH
+create tablespace sh_data datafile  '/u02/oradata/cdb1/pdb1/sh_data01.dbf'  size 1m autoextend on next 1m;
+create tablespace sh_indx datafile  '/u02/oradata/cdb1/pdb1/sh_indx01.dbf'  size 1m autoextend on next 1m;
+create tablespace sh_lob datafile   '/u02/oradata/cdb1/pdb1/sh_lob01.dbf'   size 1m autoextend on next 1m;
+alter user sh default tablespace sh_data;
+grant unlimited tablespace to sh;
+
+-- with UPDATE indexes :
+-- alter table SH.CHANNELS                     move tablespace sh_data online update indexes parallel 2;
+-- without, indexes made UNUSABLE to be rebuilt afterwards
+alter table SH.CHANNELS                     move tablespace sh_data online parallel 2;
+alter table SH.COUNTRIES                    move tablespace sh_data online parallel 2;
+alter table SH.PRODUCTS                     move tablespace sh_data online parallel 2;
+alter table SH.PROMOTIONS                   move tablespace sh_data online parallel 2;
+alter table SH.TIMES                        move tablespace sh_data online parallel 2;
+alter table SH.SUPPLEMENTARY_DEMOGRAPHICS   move tablespace sh_data online parallel 2;
+alter table SH.CUSTOMERS                    move tablespace sh_data online parallel 2;
+alter table SH.SALES                        move tablespace sh_data online parallel 2;
+
+alter index SH.CHANNELS_PK                      rebuild tablespace sh_indx parallel 2 online;
+alter index SH.COUNTRIES_PK                     rebuild tablespace sh_indx parallel 2 online;
+alter index SH.CUSTOMERS_GENDER_BIX             rebuild tablespace sh_indx parallel 2 online;
+alter index SH.CUSTOMERS_MARITAL_BIX            rebuild tablespace sh_indx parallel 2 online;
+alter index SH.CUSTOMERS_PK                     rebuild tablespace sh_indx parallel 2 online;
+alter index SH.CUSTOMERS_YOB_BIX                rebuild tablespace sh_indx parallel 2 online;
+alter index SH.PRODUCTS_PK                      rebuild tablespace sh_indx parallel 2 online;
+alter index SH.PRODUCTS_PROD_CAT_IX             rebuild tablespace sh_indx parallel 2 online;
+alter index SH.PRODUCTS_PROD_STATUS_BIX         rebuild tablespace sh_indx parallel 2 online;
+alter index SH.PRODUCTS_PROD_SUBCAT_IX          rebuild tablespace sh_indx parallel 2 online;
+alter index SH.PROMOTIONS_PK                    rebuild tablespace sh_indx parallel 2 online;
+alter index SH.SALES_CHANNEL_BIX                rebuild tablespace sh_indx parallel 2 online;
+alter index SH.SALES_CUST_BIX                   rebuild tablespace sh_indx parallel 2 online;
+alter index SH.SALES_PROD_BIX                   rebuild tablespace sh_indx parallel 2 online;
+alter index SH.SALES_PROMO_BIX                  rebuild tablespace sh_indx parallel 2 online;
+alter index SH.SALES_TIME_BIX                   rebuild tablespace sh_indx parallel 2 online;
+alter index SH.SUPPLEMENTARY_DEMOGRAPHICS_PK    rebuild tablespace sh_indx parallel 2 online;
+alter index SH.TIMES_PK                         rebuild tablespace sh_indx parallel 2 online;
+
+
+-- reorg user TPCC
+
+create tablespace tpcc_data datafile '/u02/oradata/cdb1/pdb1/tpcc_data01.dbf' size 1m autoextend on next 1m;
+create tablespace tpcc_indx datafile '/u02/oradata/cdb1/pdb1/tpcc_indx01.dbf' size 1m autoextend on next 1m;
+alter user tpcc default tablespace tpcc_data;
+grant unlimited tablespace to tpcc;
+
+
+alter table TPCC.CUSTOMER   move tablespace tpcc_data online update indexes parallel 2;
+alter table TPCC.DISTRICT   move tablespace tpcc_data online update indexes parallel 2;
+alter table TPCC.HISTORY    move tablespace tpcc_data online update indexes parallel 2;
+alter table TPCC.ITEM       move tablespace tpcc_data online update indexes parallel 2;
+alter table TPCC.ORDERS     move tablespace tpcc_data online update indexes parallel 2;
+alter table TPCC.STOCK      move tablespace tpcc_data online update indexes parallel 2;
+alter table TPCC.WAREHOUSE  move tablespace tpcc_data online update indexes parallel 2;
+
+-- IOT table
+alter table TPCC.NEW_ORDER  move tablespace tpcc_indx online;
+alter table TPCC.ORDER_LINE move tablespace tpcc_indx online;
+
+alter index TPCC.CUSTOMER_I1    rebuild tablespace tpcc_indx parallel 2 online;
+alter index TPCC.CUSTOMER_I2    rebuild tablespace tpcc_indx parallel 2 online;
+alter index TPCC.DISTRICT_I1    rebuild tablespace tpcc_indx parallel 2 online;
+alter index TPCC.ITEM_I1        rebuild tablespace tpcc_indx parallel 2 online;
+alter index TPCC.ORDERS_I1      rebuild tablespace tpcc_indx parallel 2 online;
+alter index TPCC.ORDERS_I2      rebuild tablespace tpcc_indx parallel 2 online;
+alter index TPCC.STOCK_I1       rebuild tablespace tpcc_indx parallel 2 online;
+alter index TPCC.WAREHOUSE_I1   rebuild tablespace tpcc_indx parallel 2 online;
+
+
+-- reorg user TPCH
+create tablespace tpch_data datafile '/u02/oradata/cdb1/pdb1/tpch_data01.dbf' size 1m autoextend on next 1m;
+create tablespace tpch_indx datafile '/u02/oradata/cdb1/pdb1/tpch_indx01.dbf' size 1m autoextend on next 1m;
+alter user tpch default tablespace tpch_data;
+grant unlimited tablespace to tpch;
+
+-- MOVE with UPDATE INDEXES or WITHOUT,they become UNUSABLE and we rebuild indexes afterwards in their tablespace
+-- alter table TPCH.CUSTOMER   move tablespace tpch_data online update indexes parallel 2;
+
+alter table TPCH.CUSTOMER   move tablespace tpch_data online parallel 2;
+alter table TPCH.LINEITEM   move tablespace tpch_data online parallel 2;
+alter table TPCH.NATION     move tablespace tpch_data online parallel 2;
+alter table TPCH.ORDERS     move tablespace tpch_data online parallel 2;
+alter table TPCH.PART       move tablespace tpch_data online parallel 2;
+alter table TPCH.PARTSUPP   move tablespace tpch_data online parallel 2;
+alter table TPCH.REGION     move tablespace tpch_data online parallel 2;
+alter table TPCH.SUPPLIER   move tablespace tpch_data online parallel 2;
+
+alter index TPCH.CUST_PK_IDX    rebuild tablespace tpch_indx parallel 2 online;
+alter index TPCH.ORDERS_PK_IDX  rebuild tablespace tpch_indx parallel 2 online;
+
+
+-- reorg user MOVIE
+
+create tablespace movie_data datafile   '/u02/oradata/cdb1/pdb1/movie_data01.dbf'   size 10m autoextend on next 1m;
+create tablespace movie_indx datafile   '/u02/oradata/cdb1/pdb1/movie_indx01.dbf'   size 10m autoextend on next 1m;
+create tablespace movie_lob datafile    '/u02/oradata/cdb1/pdb1/movie_lob01.dbf'    size 10m autoextend on next 1m;
+alter user movie default tablespace movie_data;
+grant unlimited tablespace to movie;
+
+alter table MOVIE.AWARDS                        move tablespace movie_data online update indexes parallel 2;
+alter table MOVIE.CAST                          move tablespace movie_data online update indexes parallel 2;
+alter table MOVIE.CREW                          move tablespace movie_data online update indexes parallel 2;
+alter table MOVIE.CUSTOMER_CONTACT              move tablespace movie_data online update indexes parallel 2;
+alter table MOVIE.CUSTOMER_FRIENDS_AND_FAMILY   move tablespace movie_data online update indexes parallel 2;
+alter table MOVIE.CUSTOMER_PAYMENT_INFORMATION  move tablespace movie_data online update indexes parallel 2;
+alter table MOVIE.CUSTOMER_REVIEW               move tablespace movie_data online update indexes parallel 2;
+alter table MOVIE.CUSTOMER_SALES_TRANSACTION    move tablespace movie_data online update indexes parallel 2;
+alter table MOVIE.GENRES                        move tablespace movie_data online update indexes parallel 2;
+alter table MOVIE.INTERACTION                   move tablespace movie_data online update indexes parallel 2;
+alter table MOVIE.MOVIES_AWARD_MAP              move tablespace movie_data online update indexes parallel 2;
+alter table MOVIE.MOVIES_CAST_MAP               move tablespace movie_data online update indexes parallel 2;
+alter table MOVIE.MOVIES_CREW_MAP               move tablespace movie_data online update indexes parallel 2;
+alter table MOVIE.MOVIES_GENRE_MAP              move tablespace movie_data online update indexes parallel 2;
+alter table MOVIE.MOVIES_NOMINATION_MAP         move tablespace movie_data online update indexes parallel 2;
+alter table MOVIE.MOVIES_STUDIO_MAP             move tablespace movie_data online update indexes parallel 2;
+alter table MOVIE.MOVIE_DETAILS                 move tablespace movie_data online update indexes parallel 2;
+alter table MOVIE.MOVIE_METADATA                move tablespace movie_data online update indexes parallel 2;
+alter table MOVIE.NOMINATIONS                   move tablespace movie_data online update indexes parallel 2;
+alter table MOVIE.STUDIOS                       move tablespace movie_data online update indexes parallel 2;
+
+
+alter table MOVIE.PURCHASE_EVENT        modify default attributes tablespace movie_data;
+alter table MOVIE.INTERACTION_EVENT     modify default attributes tablespace movie_data;
+
+-- alter table MOVIE.INTERACTION_EVENT move partition P0 tablespace movie_data update indexes parallel 2;
+-- with PARALLEL, end of file comm channel
+
+--- should work, end-of-file comm channel alter table MOVIE.PURCHASE_EVENT move partition P0 tablespace movie_data update indexes lob (USERDATA_BLOB) store as ( tablespace movie_lob) parallel 2;
+alter table MOVIE.PURCHASE_EVENT move partition P0 tablespace movie_data update indexes 
+    lob (USERDATA_BLOB)         store as ( tablespace movie_lob) 
+    lob (USER_PROPERTIES_CLOB)  store as ( tablespace movie_lob);
+alter table MOVIE.PURCHASE_EVENT move partition P1 tablespace movie_data update indexes 
+    lob (USERDATA_BLOB)         store as ( tablespace movie_lob) 
+    lob (USER_PROPERTIES_CLOB)  store as ( tablespace movie_lob);
+alter table MOVIE.PURCHASE_EVENT move partition P2 tablespace movie_data update indexes 
+    lob (USERDATA_BLOB)         store as ( tablespace movie_lob) 
+    lob (USER_PROPERTIES_CLOB)  store as ( tablespace movie_lob);
+alter table MOVIE.PURCHASE_EVENT move partition P3 tablespace movie_data update indexes 
+    lob (USERDATA_BLOB)         store as ( tablespace movie_lob) 
+    lob (USER_PROPERTIES_CLOB)  store as ( tablespace movie_lob);
+alter table MOVIE.PURCHASE_EVENT move partition P4 tablespace movie_data update indexes 
+    lob (USERDATA_BLOB)         store as ( tablespace movie_lob) 
+    lob (USER_PROPERTIES_CLOB)  store as ( tablespace movie_lob);
+
+alter table MOVIE.INTERACTION_EVENT move partition P0 tablespace movie_data update indexes 
+    lob (USERDATA_BLOB)         store as ( tablespace movie_lob) 
+    lob (USER_PROPERTIES_CLOB)  store as ( tablespace movie_lob);
+alter table MOVIE.INTERACTION_EVENT move partition P1 tablespace movie_data update indexes 
+    lob (USERDATA_BLOB)         store as ( tablespace movie_lob) 
+    lob (USER_PROPERTIES_CLOB)  store as ( tablespace movie_lob);
+alter table MOVIE.INTERACTION_EVENT move partition P2 tablespace movie_data update indexes 
+    lob (USERDATA_BLOB)         store as ( tablespace movie_lob) 
+    lob (USER_PROPERTIES_CLOB)  store as ( tablespace movie_lob);
+alter table MOVIE.INTERACTION_EVENT move partition P3 tablespace movie_data update indexes 
+    lob (USERDATA_BLOB)         store as ( tablespace movie_lob) 
+    lob (USER_PROPERTIES_CLOB)  store as ( tablespace movie_lob);
+alter table MOVIE.INTERACTION_EVENT move partition P4 tablespace movie_data update indexes 
+    lob (USERDATA_BLOB)         store as ( tablespace movie_lob) 
+    lob (USER_PROPERTIES_CLOB)  store as ( tablespace movie_lob);
+
+alter table MOVIE.AQ$_PURCHASE_EVENT_X move partition p1 tablespace movie_data update indexes 
+    lob (MESSAGE_STREAM)    store as ( tablespace movie_lob) 
+    lob (BITMAP_STREAM)     store as ( tablespace movie_lob)
+    lob (RECIPIENT_MAP)     store as ( tablespace movie_lob)    
+;
+
+alter table MOVIE.AQ$_INTERACTION_EVENT_X move partition p1 tablespace movie_data update indexes 
+    lob (MESSAGE_STREAM)    store as ( tablespace movie_lob) 
+    lob (BITMAP_STREAM)     store as ( tablespace movie_lob)
+    lob (RECIPIENT_MAP)     store as ( tablespace movie_lob)    
+;
+
+alter table MOVIE.AQ$_INTERACTION_EVENT_X   modify default attributes tablespace movie_data;
+alter table MOVIE.AQ$_PURCHASE_EVENT_X      modify default attributes tablespace movie_data;
+
+alter table MOVIE.AQ$_INTERACTION_EVENT_L move partition P0 tablespace movie_data update indexes;
+alter table MOVIE.AQ$_INTERACTION_EVENT_L move partition P1 tablespace movie_data update indexes;
+alter table MOVIE.AQ$_INTERACTION_EVENT_L move partition P2 tablespace movie_data update indexes;
+alter table MOVIE.AQ$_INTERACTION_EVENT_L move partition P3 tablespace movie_data update indexes;
+alter table MOVIE.AQ$_INTERACTION_EVENT_L move partition P4 tablespace movie_data update indexes;
+
+alter table MOVIE.AQ$_INTERACTION_EVENT_T   move partition P1 tablespace movie_data update indexes;
+alter table MOVIE.AQ$_INTERACTION_EVENT_X   move partition P1 tablespace movie_data update indexes;
+alter table MOVIE.AQ$_PURCHASE_EVENT_T      move partition P1 tablespace movie_data update indexes;
+
+
+alter table MOVIE.AQ$_PURCHASE_EVENT_L move partition P0 tablespace movie_data update indexes;
+alter table MOVIE.AQ$_PURCHASE_EVENT_L move partition P1 tablespace movie_data update indexes;
+alter table MOVIE.AQ$_PURCHASE_EVENT_L move partition P2 tablespace movie_data update indexes;
+alter table MOVIE.AQ$_PURCHASE_EVENT_L move partition P3 tablespace movie_data update indexes;
+alter table MOVIE.AQ$_PURCHASE_EVENT_L move partition P4 tablespace movie_data update indexes;
+
+alter index MOVIE.AWARDS_PK                                                         rebuild tablespace movie_indx parallel 2 online;
+alter index MOVIE.CAST_PK                                                           rebuild tablespace movie_indx parallel 2 online;
+alter index MOVIE.CREW_PK                                                           rebuild tablespace movie_indx parallel 2 online;
+alter index MOVIE.CUSTOMER_CONTACT_EMAIL_INDEX                                      rebuild tablespace movie_indx parallel 2 online;
+alter index MOVIE.CUSTOMER_CONTACT_FIRST_NAME_INDEX                                 rebuild tablespace movie_indx parallel 2 online;
+alter index MOVIE.CUSTOMER_CONTACT_LAST_NAME_INDEX                                  rebuild tablespace movie_indx parallel 2 online;
+alter index MOVIE.CUSTOMER_CONTACT_PK                                               rebuild tablespace movie_indx parallel 2 online;
+alter index MOVIE.CUSTOMER_FRIENDS_AND_FAMILY_CUSTOMER_SOURCE_INDEX                 rebuild tablespace movie_indx parallel 2 online;
+alter index MOVIE.CUSTOMER_FRIENDS_AND_FAMILY_CUSTOMER_TARGET_INDEX                 rebuild tablespace movie_indx parallel 2 online;
+alter index MOVIE.CUSTOMER_FRIENDS_AND_FAMILY_PK                                    rebuild tablespace movie_indx parallel 2 online;
+alter index MOVIE.CUSTOMER_PAYMENT_INFORMATION_CUST_ID_INDEX                        rebuild tablespace movie_indx parallel 2 online;
+alter index MOVIE.CUSTOMER_PAYMENT_INFORMATION_PK                                   rebuild tablespace movie_indx parallel 2 online;
+alter index MOVIE.CUSTOMER_REVIEW_CUST_ID_INDEX                                     rebuild tablespace movie_indx parallel 2 online;
+alter index MOVIE.CUSTOMER_REVIEW_MOVIE_ID_INDEX                                    rebuild tablespace movie_indx parallel 2 online;
+alter index MOVIE.CUSTOMER_REVIEW_PK                                                rebuild tablespace movie_indx parallel 2 online;
+alter index MOVIE.CUSTOMER_SALES_TRANSACTION_CUSTOMER_PAYMENT_INFORMATION_ID_INDEX  rebuild tablespace movie_indx parallel 2 online;
+alter index MOVIE.CUSTOMER_SALES_TRANSACTION_MOVIE_ID_INDEX                         rebuild tablespace movie_indx parallel 2 online;
+alter index MOVIE.CUSTOMER_SALES_TRANSACTION_PK                                     rebuild tablespace movie_indx parallel 2 online;
+alter index MOVIE.GENRE_PK                                                          rebuild tablespace movie_indx parallel 2 online;
+alter index MOVIE.INTERACTION_PK                                                    rebuild tablespace movie_indx parallel 2 online;
+alter index MOVIE.MOVIES_GENRE_MAP_PK                                               rebuild tablespace movie_indx parallel 2 online;
+alter index MOVIE.MOVIES_GENRE_MAP_UK                                               rebuild tablespace movie_indx parallel 2 online;
+alter index MOVIE.MOVIE_DETAILS_PK                                                  rebuild tablespace movie_indx parallel 2 online;
+alter index MOVIE.NOMINATIONS_PK                                                    rebuild tablespace movie_indx parallel 2 online;
+alter index MOVIE.STUDIOS_PK                                                        rebuild tablespace movie_indx parallel 2 online;
+alter index MOVIE.SYS_C0015267                                                      rebuild tablespace movie_indx parallel 2 online;
+alter index MOVIE.SYS_C0015280                                                      rebuild tablespace movie_indx parallel 2 online;
+
+alter index MOVIE.INTERACTION_EVENT_T_IX1   rebuild partition P1 tablespace movie_indx parallel 2 online;
+alter index MOVIE.INTERACTION_EVENT_T_IX2   rebuild partition P1 tablespace movie_indx parallel 2 online;
+alter index MOVIE.PURCHASE_EVENT_T_IX1      rebuild partition P1 tablespace movie_indx parallel 2 online;
+alter index MOVIE.PURCHASE_EVENT_T_IX2      rebuild partition P1 tablespace movie_indx parallel 2 online;
+alter index MOVIE."dql84623_sqno_idx"       rebuild partition P0 tablespace movie_indx parallel 2 online;
+alter index MOVIE."dql84623_sqno_idx"       rebuild partition P1 tablespace movie_indx parallel 2 online;
+alter index MOVIE."dql84623_sqno_idx"       rebuild partition P2 tablespace movie_indx parallel 2 online;
+alter index MOVIE."dql84623_sqno_idx"       rebuild partition P3 tablespace movie_indx parallel 2 online;
+alter index MOVIE."dql84623_sqno_idx"       rebuild partition P4 tablespace movie_indx parallel 2 online;
+alter index MOVIE."dql84709_sqno_idx"       rebuild partition P0 tablespace movie_indx parallel 2 online;
+alter index MOVIE."dql84709_sqno_idx"       rebuild partition P1 tablespace movie_indx parallel 2 online;
+alter index MOVIE."dql84709_sqno_idx"       rebuild partition P2 tablespace movie_indx parallel 2 online;
+alter index MOVIE."dql84709_sqno_idx"       rebuild partition P3 tablespace movie_indx parallel 2 online;
+alter index MOVIE."dql84709_sqno_idx"       rebuild partition P4 tablespace movie_indx parallel 2 online;
+alter index MOVIE."qt84580_delay_idx"       rebuild partition P0 tablespace movie_indx parallel 2 online;
+alter index MOVIE."qt84580_delay_idx"       rebuild partition P1 tablespace movie_indx parallel 2 online;
+alter index MOVIE."qt84580_delay_idx"       rebuild partition P2 tablespace movie_indx parallel 2 online;
+alter index MOVIE."qt84580_delay_idx"       rebuild partition P3 tablespace movie_indx parallel 2 online;
+alter index MOVIE."qt84580_delay_idx"       rebuild partition P4 tablespace movie_indx parallel 2 online;
+alter index MOVIE."qt84580_sqno_idx"        rebuild partition P0 tablespace movie_indx parallel 2 online;
+alter index MOVIE."qt84580_sqno_idx"        rebuild partition P1 tablespace movie_indx parallel 2 online;
+alter index MOVIE."qt84580_sqno_idx"        rebuild partition P2 tablespace movie_indx parallel 2 online;
+alter index MOVIE."qt84580_sqno_idx"        rebuild partition P3 tablespace movie_indx parallel 2 online;
+alter index MOVIE."qt84580_sqno_idx"        rebuild partition P4 tablespace movie_indx parallel 2 online;
+alter index MOVIE."qt84666_delay_idx"       rebuild partition P0 tablespace movie_indx parallel 2 online;
+alter index MOVIE."qt84666_delay_idx"       rebuild partition P1 tablespace movie_indx parallel 2 online;
+alter index MOVIE."qt84666_delay_idx"       rebuild partition P2 tablespace movie_indx parallel 2 online;
+alter index MOVIE."qt84666_delay_idx"       rebuild partition P3 tablespace movie_indx parallel 2 online;
+alter index MOVIE."qt84666_delay_idx"       rebuild partition P4 tablespace movie_indx parallel 2 online;
+alter index MOVIE."qt84666_sqno_idx"        rebuild partition P0 tablespace movie_indx parallel 2 online;
+alter index MOVIE."qt84666_sqno_idx"        rebuild partition P1 tablespace movie_indx parallel 2 online;
+alter index MOVIE."qt84666_sqno_idx"        rebuild partition P2 tablespace movie_indx parallel 2 online;
+alter index MOVIE."qt84666_sqno_idx"        rebuild partition P3 tablespace movie_indx parallel 2 online;
+alter index MOVIE."qt84666_sqno_idx"        rebuild partition P4 tablespace movie_indx parallel 2 online;
+
+
+-- reorg user SOE
+create tablespace soe_data datafile '/u02/oradata/cdb1/pdb1/soe_data01.dbf' size 10m autoextend on next 1m;
+create tablespace soe_indx datafile '/u02/oradata/cdb1/pdb1/soe_indx01.dbf' size 10m autoextend on next 1m;
+alter user soe default tablespace soe_data;
+grant unlimited tablespace to soe;
+
+alter table SOE.ORDERENTRY_METADATA     move tablespace soe_data online parallel 2;
+alter table SOE.PRODUCT_DESCRIPTIONS    move tablespace soe_data online parallel 2;
+alter table SOE.PRODUCT_INFORMATION     move tablespace soe_data online parallel 2;
+alter table SOE.WAREHOUSES              move tablespace soe_data online parallel 2;
+alter table SOE.INVENTORIES             move tablespace soe_data online parallel 2;
+alter table SOE.CUSTOMERS               move tablespace soe_data online parallel 2;
+alter table SOE.ORDERS                  move tablespace soe_data online parallel 2;
+alter table SOE.ADDRESSES               move tablespace soe_data online parallel 2;
+alter table SOE.CARD_DETAILS            move tablespace soe_data online parallel 2;
+alter table SOE.LOGON                   move tablespace soe_data online parallel 2;
+alter table SOE.ORDER_ITEMS             move tablespace soe_data online parallel 2;
+
+alter index SOE.ADDRESS_CUST_IX             rebuild tablespace soe_indx parallel 2 online;
+alter index SOE.ADDRESS_PK                  rebuild tablespace soe_indx parallel 2 online;
+alter index SOE.CARDDETAILS_CUST_IX         rebuild tablespace soe_indx parallel 2 online;
+alter index SOE.CARD_DETAILS_PK             rebuild tablespace soe_indx parallel 2 online;
+alter index SOE.CUSTOMERS_PK                rebuild tablespace soe_indx parallel 2 online;
+alter index SOE.CUST_ACCOUNT_MANAGER_IX     rebuild tablespace soe_indx parallel 2 online;
+alter index SOE.CUST_DOB_IX                 rebuild tablespace soe_indx parallel 2 online;
+alter index SOE.CUST_EMAIL_IX               rebuild tablespace soe_indx parallel 2 online;
+alter index SOE.CUST_FUNC_LOWER_NAME_IX     rebuild tablespace soe_indx parallel 2 online;
+alter index SOE.INVENTORY_PK                rebuild tablespace soe_indx parallel 2 online;
+alter index SOE.INV_PRODUCT_IX              rebuild tablespace soe_indx parallel 2 online;
+alter index SOE.INV_WAREHOUSE_IX            rebuild tablespace soe_indx parallel 2 online;
+alter index SOE.ITEM_ORDER_IX               rebuild tablespace soe_indx parallel 2 online;
+alter index SOE.ITEM_PRODUCT_IX             rebuild tablespace soe_indx parallel 2 online;
+alter index SOE.ORDER_ITEMS_PK              rebuild tablespace soe_indx parallel 2 online;
+alter index SOE.ORDER_PK                    rebuild tablespace soe_indx parallel 2 online;
+alter index SOE.ORD_CUSTOMER_IX             rebuild tablespace soe_indx parallel 2 online;
+alter index SOE.ORD_ORDER_DATE_IX           rebuild tablespace soe_indx parallel 2 online;
+alter index SOE.ORD_SALES_REP_IX            rebuild tablespace soe_indx parallel 2 online;
+alter index SOE.ORD_WAREHOUSE_IX            rebuild tablespace soe_indx parallel 2 online;
+alter index SOE.PRD_DESC_PK                 rebuild tablespace soe_indx parallel 2 online;
+alter index SOE.PRODUCT_INFORMATION_PK      rebuild tablespace soe_indx parallel 2 online;
+alter index SOE.PROD_CATEGORY_IX            rebuild tablespace soe_indx parallel 2 online;
+alter index SOE.PROD_NAME_IX                rebuild tablespace soe_indx parallel 2 online;
+alter index SOE.PROD_SUPPLIER_IX            rebuild tablespace soe_indx parallel 2 online;
+alter index SOE.WAREHOUSES_PK               rebuild tablespace soe_indx parallel 2 online;
+alter index SOE.WHS_LOCATION_IX             rebuild tablespace soe_indx parallel 2 online;
+
+
+-- reorg user TPCDSLIKE
+create tablespace tpcds_data datafile '/u02/oradata/cdb1/pdb1/tpcds_data01.dbf' size 10m autoextend on next 1m;
+create tablespace tpcds_indx datafile '/u02/oradata/cdb1/pdb1/tpcds_indx01.dbf' size 10m autoextend on next 1m;
+alter user TPCDSLIKE default tablespace tpcds_data;
+grant unlimited tablespace to TPCDSLIKE;
+
+alter table TPCDSLIKE.WAREHOUSE                 move tablespace tpcds_data online parallel 2;
+alter table TPCDSLIKE.CALL_CENTER               move tablespace tpcds_data online parallel 2;
+alter table TPCDSLIKE.STORE                     move tablespace tpcds_data online parallel 2;
+alter table TPCDSLIKE.INCOME_BAND               move tablespace tpcds_data online parallel 2;
+alter table TPCDSLIKE.SHIP_MODE                 move tablespace tpcds_data online parallel 2;
+alter table TPCDSLIKE.WEB_SITE                  move tablespace tpcds_data online parallel 2;
+alter table TPCDSLIKE.REASON                    move tablespace tpcds_data online parallel 2;
+alter table TPCDSLIKE.PROMOTION                 move tablespace tpcds_data online parallel 2;
+alter table TPCDSLIKE.WEB_PAGE                  move tablespace tpcds_data online parallel 2;
+alter table TPCDSLIKE.HOUSEHOLD_DEMOGRAPHICS    move tablespace tpcds_data online parallel 2;
+alter table TPCDSLIKE.CATALOG_PAGE              move tablespace tpcds_data online parallel 2;
+alter table TPCDSLIKE.ITEM                      move tablespace tpcds_data online parallel 2;
+alter table TPCDSLIKE.WEB_RETURNS               move tablespace tpcds_data online parallel 2;
+alter table TPCDSLIKE.DATE_DIM                  move tablespace tpcds_data online parallel 2;
+alter table TPCDSLIKE.TIME_DIM                  move tablespace tpcds_data online parallel 2;
+alter table TPCDSLIKE.CUSTOMER_ADDRESS          move tablespace tpcds_data online parallel 2;
+alter table TPCDSLIKE.CATALOG_RETURNS           move tablespace tpcds_data online parallel 2;
+alter table TPCDSLIKE.CUSTOMER                  move tablespace tpcds_data online parallel 2;
+alter table TPCDSLIKE.STORE_RETURNS             move tablespace tpcds_data online parallel 2;
+alter table TPCDSLIKE.WEB_SALES                 move tablespace tpcds_data online parallel 2;
+alter table TPCDSLIKE.CATALOG_SALES             move tablespace tpcds_data online parallel 2;
+alter table TPCDSLIKE.CUSTOMER_DEMOGRAPHICS     move tablespace tpcds_data online parallel 2;
+alter table TPCDSLIKE.STORE_SALES               move tablespace tpcds_data online parallel 2;
+alter table TPCDSLIKE.INVENTORY                 move tablespace tpcds_data online parallel 2;
+
+alter index TPCDSLIKE.INVENTORY_NUK             rebuild tablespace tpcds_indx parallel 2 online;
+
+-- get the path of DIRECTORY data_pump_dir
+cat <<END > /tmp/get_data_pump_dir.sql
+connect system/manager@pdb1
+set lines 200 pages 0 echo off head off trim off trims off feed off
+rem alter session set container=pdb1;
+SELECT trim(directory_path) FROM dba_directories WHERE directory_name='DATA_PUMP_DIR';
+exit
+END
+vdir_path=$(${ORACLE_HOME}/bin/sqlplus -L -S /nolog @/tmp/get_data_pump_dir.sql | tr -d '\r' | tr -d ' ' | tr -d '\n')
+rm -f /tmp/get_data_pump_dir.sql
+echo $vdir_path
+echo $ORACLE_SID
+
+-- exports users bench
+cat <<END > $vdir_path/users_bench_EXP.par
+directory       =   data_pump_dir
+dumpfile        =   users_bench%U.dmp
+logfile         =   users_bench_EXP.log
+schemas         =   MOVIE,SCOTT,SH,SOE,TPCC,TPCDSLIKE,TPCH
+parallel        =   2
+filesize        =   2G
+exclude         =   statistics
+FLASHBACK_TIME  =   systimestamp
+END
+expdp system/manager@pdb1 parfile=$vdir_path/users_bench_EXP.par
+
+-- export the metadata for the bench users
+cat <<END > $vdir_path/users_bench_meta_EXP.par
+directory       =   data_pump_dir
+dumpfile        =   users_bench_meta.dmp
+logfile         =   users_bench_meta_EXP.log
+content         =   metadata_only
+schemas         =   MOVIE,SCOTT,SH,SOE,TPCC,TPCDSLIKE,TPCH
+exclude         =   statistics
+FLASHBACK_TIME  =   systimestamp
+END
+expdp system/manager@pdb1 parfile=$vdir_path/users_bench_meta_EXP.par
+
+-- extract the sql definitions FROM the metadata export
+cat <<END > $vdir_path/users_bench_meta_IMP.par
+directory   = data_pump_dir
+dumpfile    = users_bench_meta.dmp
+logfile     = users_bench_meta_IMP.log
+SQLFILE     = users_bench_meta.sql
+#schemas    = scott
+transform   = storage:n
+transform   = segment_attributes:n
+END
+impdp system/manager@pdb1 parfile=$vdir_path/users_bench_meta_IMP.par
+
+-- import the bench users
+cat <<END > $vdir_path/users_bench_IMP.par
+directory       = data_pump_dir
+dumpfile        = users_bench%U.dmp
+logfile         = users_bench_IMP.log
+schemas         = MOVIE,SCOTT,SH,SOE,TPCC,TPCDSLIKE,TPCH
+#transform       = storage:n
+#transform       = segment_attributes:n
+parallel        = 2
+END
+impdp system/manager@pdb1 parfile=$vdir_path/users_bench_IMP.par
+
+Datafiles
+Status	   Enabled BigF Flb Bck    Incr TABLESPACE_NAME 		        Megs  Id FILE_NAME
+------------------------------- ------- ------------------------- ---------- --- ------------------------------------------------------------------------------------------
+ ONLINE READ WRITE   NO YES YES    1280 EXAMPLE 			            2.00  14 /u02/oradata/cdb1/pdb1/example01.dbf
+ ONLINE READ WRITE   NO YES YES     128 MOVIE_DATA		             1142.00  40 /u02/oradata/cdb1/pdb1/movie_data01.dbf
+ ONLINE READ WRITE   NO YES YES     128 MOVIE_INDX		              713.00  41 /u02/oradata/cdb1/pdb1/movie_indx01.dbf
+ ONLINE READ WRITE   NO YES YES     128 MOVIE_LOB		               31.00  42 /u02/oradata/cdb1/pdb1/movie_lob01.dbf
+ ONLINE READ WRITE   NO YES YES     128 SCOTT_DATA		              101.00  30 /u02/oradata/cdb1/pdb1/scott_data01.dbf
+ ONLINE READ WRITE   NO YES YES     128 SCOTT_INDX			            1.00  31 /u02/oradata/cdb1/pdb1/scott_indx01.dbf
+ ONLINE READ WRITE   NO YES YES     128 SCOTT_LOB		               39.00  32 /u02/oradata/cdb1/pdb1/scott_lob01.dbf
+ ONLINE READ WRITE   NO YES YES     128 SH_DATA 		             1208.00  33 /u02/oradata/cdb1/pdb1/sh_data01.dbf
+ ONLINE READ WRITE   NO YES YES     128 SH_INDX 		              256.00  34 /u02/oradata/cdb1/pdb1/sh_indx01.dbf
+ ONLINE READ WRITE   NO YES YES     128 SOE_DATA		             1413.00  43 /u02/oradata/cdb1/pdb1/soe_data01.dbf
+ ONLINE READ WRITE   NO YES YES     128 SOE_INDX		              850.00  44 /u02/oradata/cdb1/pdb1/soe_indx01.dbf
+ ONLINE READ WRITE   NO YES YES    1280 SYSAUX			              520.00  10 /u02/oradata/cdb1/pdb1/sysaux01.dbf
+ SYSTEM READ WRITE   NO YES YES    1280 SYSTEM			              450.00   9 /u02/oradata/cdb1/pdb1/system01.dbf
+ ONLINE READ WRITE   NO YES YES     128 TPCC_DATA		              303.00  36 /u02/oradata/cdb1/pdb1/tpcc_data01.dbf
+ ONLINE READ WRITE   NO YES YES     128 TPCC_INDX		              198.00  37 /u02/oradata/cdb1/pdb1/tpcc_indx01.dbf
+ ONLINE READ WRITE   NO YES YES     128 TPCDS_DATA		             1368.00  45 /u02/oradata/cdb1/pdb1/tpcds_data01.dbf
+ ONLINE READ WRITE   NO YES YES     128 TPCDS_INDX		              368.00  46 /u02/oradata/cdb1/pdb1/tpcds_indx01.dbf
+ ONLINE READ WRITE   NO YES YES     128 TPCH_DATA		            11332.00  38 /u02/oradata/cdb1/pdb1/tpch_data01.dbf
+ ONLINE READ WRITE   NO YES YES     128 TPCH_INDX		              304.00  39 /u02/oradata/cdb1/pdb1/tpch_indx01.dbf
+ ONLINE READ WRITE   NO YES YES     640 UNDOTBS1		             1440.00  11 /u02/oradata/cdb1/pdb1/undotbs01.dbf
+ ONLINE READ WRITE   NO YES YES     160 USERS				            2.00  12 /u02/oradata/cdb1/pdb1/users01.dbf
+
+Users
+MOVIE			       OPEN		    MOVIE_DATA		      TEMP			15/12/2024 18:24:07  15/12/2024 18:34:20  11G 12C  N	   NO
+PDBADMIN		       OPEN		    USERS		          TEMP			28/07/2024 09:07:44			  11G 12C  N	   NO
+SCOTT			       OPEN		    SCOTT_DATA		      TEMP			13/01/2025 09:29:30			  11G 12C  N	   NO
+SH			           OPEN		    SH_DATA		          TEMP			15/12/2024 14:49:08  15/12/2024 18:37:08  11G 12C  N	   NO
+SOE			           OPEN		    SOE_DATA		      TEMP			10/01/2025 16:40:18  10/01/2025 16:45:00  11G 12C  N	   NO
+TPCC			       OPEN		    TPCC_DATA		      TEMP			15/12/2024 15:47:10  15/12/2024 16:12:06  11G 12C  N	   NO
+TPCDSLIKE		       OPEN		    TPCDS_DATA		      TEMP			15/12/2024 16:59:32  15/12/2024 17:58:53  11G 12C  N	   NO
+TPCH			       OPEN		    TPCH_DATA		      TEMP			15/12/2024 15:29:14  15/12/2024 16:03:22  11G 12C  N	   NO
+
+create tablespace scott_data datafile '/u02/oradata/CDB1/pdb1/scott_data01.dbf' size 1m autoextend on next 1m;
+create tablespace scott_indx datafile '/u02/oradata/CDB1/pdb1/scott_indx01.dbf' size 1m autoextend on next 1m;
+create tablespace scott_lob  datafile '/u02/oradata/CDB1/pdb1/scott_lob01.dbf'  size 1m autoextend on next 1m;
+
+create tablespace movie_data datafile '/u02/oradata/CDB1/pdb1/movie_data01.dbf' size 1m autoextend on next 1m;
+create tablespace movie_indx datafile '/u02/oradata/CDB1/pdb1/movie_indx01.dbf' size 1m autoextend on next 1m;
+create tablespace movie_lob  datafile '/u02/oradata/CDB1/pdb1/movie_lob01.dbf'  size 1m autoextend on next 1m;
+
+create tablespace sh_data datafile '/u02/oradata/CDB1/pdb1/sh_data01.dbf' size 1m autoextend on next 1m;
+create tablespace sh_indx datafile '/u02/oradata/CDB1/pdb1/sh_indx01.dbf' size 1m autoextend on next 1m;
+
+create tablespace soe_data datafile '/u02/oradata/CDB1/pdb1/soe_data01.dbf' size 1m autoextend on next 1m;
+create tablespace soe_indx datafile '/u02/oradata/CDB1/pdb1/soe_indx01.dbf' size 1m autoextend on next 1m;
+
+create tablespace tpcc_data datafile '/u02/oradata/CDB1/pdb1/tpcc_data01.dbf' size 1m autoextend on next 1m;
+create tablespace tpcc_indx datafile '/u02/oradata/CDB1/pdb1/tpcc_indx01.dbf' size 1m autoextend on next 1m;
+
+create tablespace tpcds_data datafile '/u02/oradata/CDB1/pdb1/tpcds_data01.dbf' size 1m autoextend on next 1m;
+create tablespace tpcds_indx datafile '/u02/oradata/CDB1/pdb1/tpcds_indx01.dbf' size 1m autoextend on next 1m;
+
+create tablespace tpch_data datafile '/u02/oradata/CDB1/pdb1/tpch_data01.dbf' size 1m autoextend on next 1m;
+create tablespace tpch_indx datafile '/u02/oradata/CDB1/pdb1/tpch_indx01.dbf' size 1m autoextend on next 1m;
+
+
+
+
+create tablespace scott_data datafile '/u02/oradata/ORCL/scott_data01.dbf' size 1m autoextend on next 1m;
+create tablespace scott_indx datafile '/u02/oradata/ORCL/scott_indx01.dbf' size 1m autoextend on next 1m;
+create tablespace scott_lob  datafile '/u02/oradata/ORCL/scott_lob01.dbf'  size 1m autoextend on next 1m;
+
+create tablespace movie_data datafile '/u02/oradata/ORCL/movie_data01.dbf' size 1m autoextend on next 1m;
+create tablespace movie_indx datafile '/u02/oradata/ORCL/movie_indx01.dbf' size 1m autoextend on next 1m;
+create tablespace movie_lob  datafile '/u02/oradata/ORCL/movie_lob01.dbf'  size 1m autoextend on next 1m;
+
+create tablespace sh_data datafile '/u02/oradata/ORCL/sh_data01.dbf' size 1m autoextend on next 1m;
+create tablespace sh_indx datafile '/u02/oradata/ORCL/sh_indx01.dbf' size 1m autoextend on next 1m;
+
+create tablespace soe_data datafile '/u02/oradata/ORCL/soe_data01.dbf' size 1m autoextend on next 1m;
+create tablespace soe_indx datafile '/u02/oradata/ORCL/soe_indx01.dbf' size 1m autoextend on next 1m;
+
+create tablespace tpcc_data datafile '/u02/oradata/ORCL/tpcc_data01.dbf' size 1m autoextend on next 1m;
+create tablespace tpcc_indx datafile '/u02/oradata/ORCL/tpcc_indx01.dbf' size 1m autoextend on next 1m;
+
+create tablespace tpcds_data datafile '/u02/oradata/ORCL/tpcds_data01.dbf' size 1m autoextend on next 1m;
+create tablespace tpcds_indx datafile '/u02/oradata/ORCL/tpcds_indx01.dbf' size 1m autoextend on next 1m;
+
+create tablespace tpch_data datafile '/u02/oradata/ORCL/tpch_data01.dbf' size 1m autoextend on next 1m;
+create tablespace tpch_indx datafile '/u02/oradata/ORCL/tpch_indx01.dbf' size 1m autoextend on next 1m;
+
+
+
+create user scott       identified by tiger         default tablespace scott_data   temporary tablespace temp;
+create user movie       identified by movie         default tablespace movie_data   temporary tablespace temp;
+create user sh          identified by sh            default tablespace sh_data      temporary tablespace temp;
+create user soe         identified by soe           default tablespace soe_data     temporary tablespace temp;
+create user tpcc        identified by tpcc          default tablespace tpcc_data    temporary tablespace temp;
+create user tpcdslike   identified by tpcdslike     default tablespace tpcds_data   temporary tablespace temp;
+create user tpch        identified by tpch          default tablespace tpch_data    temporary tablespace temp;
+
+grant connect,resource,unlimited tablespace to scott,movie,sh,soe,tpcc,tpcdslike,tpch;
+grant execute on dbms_lock to tpcdslike,tpcc;

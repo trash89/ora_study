@@ -1,0 +1,50 @@
+ora2pg install
+
+sudo dnf install oracle-instantclient-release-23ai-el8
+
+-- PG non free repo
+dnf install https://download.postgresql.org/pub/repos/yum/reporpms/non-free/EL-8-x86_64/pgdg-redhat-nonfree-repo-latest.noarch.rpm
+
+dnf install pg_activity
+
+dnf install ora2pg
+dnf install oracle_fdw_17 pgtt_17 pgsql_tweaks_17 pg_dbms_metadata_17 pg_dbms_lock_17 pg_dbms_job_17 orafce_17 extra_window_functions_17 pg_fkpart_17
+dnf install pg_repack_17 pg_partman_17 pg_squeeze_17
+
+
+-- manually install as root
+
+-- install the following rpms
+rpm -ihv ./oracle-instantclient12.2-basic-12.2.0.1.0-1.x86_64.rpm ./oracle-instantclient12.2-jdbc-12.2.0.1.0-1.x86_64.rpm ./oracle-instantclient12.2-sqlplus-12.2.0.1.0-1.x86_64.rpm ./oracle-instantclient12.2-devel-12.2.0.1.0-1.x86_64.rpm ./oracle-instantclient12.2-tools-12.2.0.1.0-1.x86_64.rpm
+
+-- The Oracle Client is installed in /usr/lib/oracle/12.2/client64
+
+dnf config-manager --set-enabled ol8_codeready_builder
+dnf install postgresql17-devel
+dnf install perl-CPAN
+dnf install libnsl
+dnf install perl-Archive-Extract-Z-Compress-Zlib perl-Archive-Extract-gz-Compress-Zlib perl-Archive-Extract-tgz-Archive-Tar-Compress-Zlib 
+
+-- not necessary if postgresql17-devel package is installing it
+dnf install perl-IPC-Run
+
+perl -MCPAN -e 'install IPC::Run'
+perl -MCPAN -e 'install DBD::Pg'
+
+Path to pg_config? /usr/pgsql-17/bin/pg_config
+
+-- download ora2pg-x.x.tar.bz2 and unzp it under root user
+tar xjf ora2pg-x.x.tar.bz2
+cd ora2pg-x.x/
+perl Makefile.PL
+make && make install
+
+export LD_LIBRARY_PATH=/usr/lib/oracle/12.2/client64/lib
+export ORACLE_HOME=/usr/lib/oracle/12.2/client64
+export PATH=$ORACLE_HOME/bin:$PATH
+perl -MCPAN -e 'install DBD::Oracle'
+
+
+-- add in .bash_profile of the postgres user
+export LD_LIBRARY_PATH=/usr/lib/oracle/12.2/client64/lib
+export PATH="/usr/lib/oracle/12.2/client64/bin:$PATH"

@@ -1,0 +1,322 @@
+-- for populating the Oracle o19cs ORCL database, use soewizard from swingbench
+-- it created the SOE user and populate the tables
+
+-- validate the constraint in status NOT VALIDATED:
+alter table soe.ADDRESSES enable validate constraint ADDRESS_PK;
+alter table soe.CARD_DETAILS enable validate constraint CARD_DETAILS_PK;
+alter table soe.CUSTOMERS enable validate constraint CUSTOMERS_PK;
+alter table soe.INVENTORIES enable validate constraint INVENTORY_PK;
+alter table soe.ORDERS enable validate constraint ORDER_PK;
+alter table soe.ORDER_ITEMS enable validate constraint ORDER_ITEMS_PK;
+alter table soe.PRODUCT_DESCRIPTIONS enable validate constraint PRODUCT_DESCRIPTIONS_PK;
+alter table soe.WAREHOUSES enable validate constraint WAREHOUSES_PK;
+
+alter table soe.ADDRESSES enable validate constraint ADD_CUST_FK;
+alter table soe.INVENTORIES enable validate constraint INVENTORIES_PRODUCT_ID_FK;
+alter table soe.INVENTORIES enable validate constraint INVENTORIES_WAREHOUSES_FK;
+alter table soe.ORDERS enable validate constraint ORDERS_CUSTOMER_ID_FK;
+alter table soe.ORDER_ITEMS enable validate constraint ORDER_ITEMS_ORDER_ID_FK;
+alter table soe.ORDER_ITEMS enable validate constraint ORDER_ITEMS_PRODUCT_ID_FK;
+
+alter table soe.ORDERS enable validate constraint ORDER_TOTAL_MIN;
+alter table soe.ORDERS enable validate constraint ORDER_MODE_LOV;
+alter table soe.CUSTOMERS enable validate constraint CUSTOMER_ID_MIN;
+
+-- The constraint CUSTOMER_CREDIT_LIMIT_MAX from the table CUSTOMERS	(credit_limit <= 50000) will remain NOT VALIDATED
+
+-- on source server (o12c)
+adminclient
+connect http://o19cs:5001 user ggma
+start deployment udepl1
+connect http://o19cs:5001 user ggma
+
+alter credentialstore add user ggs_owner@o19cs:1521/ORCL password ggs_owner alias ggs_owner_aliasc
+
+dblogin USERIDALIAS ggs_owner_aliasc
+ADD TRANDATA SOE.*
+
+
+-- for initial copy, we should create an extract with SOURCEISTABLE
+-- ADD EXTRACT ext1, SOURCEISTABLE
+
+-- but we have already imported the data as of SCN 2259446
+ADD EXTRACT ext1, tranlog, scn 2259446
+
+register extract ext1 database
+
+-- Create the parameter file for the extract group load1
+EDIT PARAMS ext1
+
+EXTRACT ext1
+USERIDALIAS ggs_owner_aliasc, DOMAIN OracleGoldenGate
+EXTFILE lt, purge
+TABLE SOE.ADDRESSES;
+TABLE SOE.CARD_DETAILS;
+TABLE SOE.CUSTOMERS;
+TABLE SOE.INVENTORIES;
+TABLE SOE.LOGON;
+TABLE SOE.ORDERENTRY_METADATA;
+TABLE SOE.ORDERS;
+TABLE SOE.ORDER_ITEMS;
+TABLE SOE.PRODUCT_DESCRIPTIONS;
+TABLE SOE.PRODUCT_INFORMATION;
+TABLE SOE.WAREHOUSES;
+
+
+start extract ext1
+info extract ext1
+view report ext1
+
+
+-- on target server (pg1)
+
+mkdir ora2pg_migrate
+cd ora2pg_migrate
+
+ora2pg --project_base /home/postgres/ora2pg_migrate --init_project ora_to_pg17
+
+-- modify ./ora_to_pg17/config/ora2pg.conf, add at the end of ora2pg.conf file
+vi ./ora_to_pg17/config/ora2pg.conf
+--------------------------------------------------------------------------------------------------------------------------------
+ORACLE_HOME     /usr/lib/oracle/23/client64
+ORACLE_DSN      dbi:Oracle:host=o19cs;sid=ORCL;port=1521
+USER_GRANTS     0
+EXPORT_SCHEMA   1
+SCHEMA          SOE
+CREATE_SCHEMA   1
+SYSUSERS        GGS_OWNER
+NLS_LANG        AMERICAN_AMERICA.AL32UTF8
+NLS_NCHAR       AL32UTF8
+CLIENT_ENCODING UTF8
+TYPE            TABLE
+PRESERVE_CASE           1
+INDEXES_RENAMING        1
+RENAME_PARTITION        1
+USE_RESERVED_WORDS      1
+DATA_TYPE       VARCHAR2:varchar,NVARCHAR2:varchar,NVARCHAR:varchar,NCHAR:char,DATE:timestamp(0),LONG:text,LONG RAW:bytea,CLOB:text,NCLOB:text,BLOB:bytea,BFILE:bytea,RAW(16):uuid,RAW(32):uuid,RAW:bytea,UROWID:oid,ROWID:oid,FLOAT:double precision,DEC:decimal,DECIMAL:decimal,DOUBLE PRECISION:double precision,INT:integer,INTEGER:integer,REAL:real,SMALLINT:smallint,BINARY_FLOAT:double precision,BINARY_DOUBLE:double precision,TIMESTAMP:timestamp,XMLTYPE:xml,BINARY_INTEGER:integer,PLS_INTEGER:integer,TIMESTAMP WITH TIME ZONE:timestamp with time zone,TIMESTAMP WITH LOCAL TIME ZONE:timestamp with time zone,TIMESTAMP(6) WITH LOCAL TIME ZONE:timestamp with time zone
+DATA_LIMIT                      100000
+JOBS                            2
+ORACLE_COPIES                   2
+PARALLEL_TABLES                 2
+DEFAULT_PARALLELISM_DEGREE      2
+PARALLEL_MIN_ROWS               100000
+DROP_INDEXES                    1
+USE_ORAFCE                      1
+PG_VERSION                      17
+--------------------------------------------------------------------------------------------------------------------------------
+
+cd ora_to_pg17
+
+-- run export_schema.sh
+./export_schema.sh
+
+-- To extract data use the following command:
+
+ora2pg -t COPY -o data.sql -b ./data -c ./config/ora2pg.conf 
+-- with scn  SELECT current_scn FROM v$database;
+ora2pg -t COPY --scn 2259446 -o data.sql -b ./data -c ./config/ora2pg.conf
+
+sudo dnf install pgtt_17
+
+-- prepare the PG database
+psql<<END
+drop database if exists test;
+drop database if exists o19c;
+drop user if exists ggs_owner;
+drop user if exists "SOE";
+create database o19c;
+\c o19c
+create extension orafce;
+create extension pgtt;
+create extension btree_gin;
+create extension pg_trgm;
+create extension pg_stat_statements;
+create user ggs_owner with password 'ggs_owner' superuser;
+CREATE SCHEMA IF NOT EXISTS ggschema AUTHORIZATION ggs_owner;
+create user "SOE" with password 'SOE' nosuperuser;
+grant all privileges on database o19c to "SOE";
+END
+
+
+-- import all
+
+./import_all.sh -d o19c -o "SOE" -p 5432
+
+[postgres@pg1 ora_to_pg17]$ ./import_all.sh -d o19c -o "SOE" -p 5432
+Database owner SOE already exists, skipping creation.
+Would you like to drop the database o19c before recreate it? [y/N/q] n
+Would you like to import SEQUENCE from ./schema/sequences/sequence.sql? [y/N/q] y
+Running: psql --single-transaction  -p 5432 -U SOE -d o19c -f ./schema/sequences/sequence.sql
+SET
+SET
+CREATE SCHEMA
+CREATE SEQUENCE
+CREATE SEQUENCE
+CREATE SEQUENCE
+CREATE SEQUENCE
+CREATE SEQUENCE
+Would you like to import SEQUENCE_VALUES from ./schema/sequence_values/sequence_value.sql? [y/N/q] y
+Running: psql --single-transaction  -p 5432 -U SOE -d o19c -f ./schema/sequence_values/sequence_value.sql
+SET
+SET
+SET
+ALTER SEQUENCE
+ALTER SEQUENCE
+ALTER SEQUENCE
+ALTER SEQUENCE
+ALTER SEQUENCE
+Would you like to import TABLE from ./schema/tables/table.sql? [y/N/q] y
+Running: psql --single-transaction  -p 5432 -U SOE -d o19c -f ./schema/tables/table.sql
+SET
+psql:schema/tables/table.sql:9: NOTICE:  schema "SOE" already exists, skipping
+CREATE SCHEMA
+ALTER SCHEMA
+SET
+CREATE TABLE
+CREATE TABLE
+CREATE TABLE
+CREATE TABLE
+CREATE TABLE
+CREATE TABLE
+CREATE TABLE
+CREATE TABLE
+CREATE TABLE
+CREATE TABLE
+CREATE TABLE
+Would you like to import PACKAGE from ./schema/packages/package.sql? [y/N/q] n
+Would you like to import VIEW from ./schema/views/view.sql? [y/N/q] n
+Would you like to process indexes and constraints before loading data? [y/N/q] n
+Would you like to import TABLESPACE from ./schema/tablespaces/tablespace.sql? [y/N/q] n
+Would you like to import data from ./data/data.sql? [y/N/q] y
+
+-- import indexes, constraints and foreign keys after the data import
+
+-- clean up between exports and imports
+rm -f ./data/*.sql
+rm -f ./schema/dblinks/*.sql
+rm -f ./schema/functions/*.sql
+rm -f ./schema/mviews/*.sql
+rm -f ./schema/partitions/*.sql
+rm -f ./schema/sequences/*.sql
+rm -f ./schema/synonyms/*.sql
+rm -f ./schema/tablespaces/*.sql
+rm -f ./schema/types/*.sql
+rm -f ./schema/directories/*.sql
+rm -f ./schema/grants/*.sql
+rm -f ./schema/packages/*.sql
+rm -f ./schema/procedures/*.sql
+rm -f ./schema/sequence_values/*.sql
+rm -f ./schema/tables/*.sql
+rm -f ./schema/triggers/*.sql
+rm -f ./schema/views/*.sql
+
+
+-- on target server (pg1)
+
+-- Create the initial data load task rep1
+
+adminclient
+connect http://pg1:5001 as ggma
+
+alter credentialstore add user ggs_owner@pg1:5432/o19c password ggs_owner alias ggs_owner_aliasc
+
+dblogin USERIDALIAS ggs_owner_aliasc
+add checkpointtable ggschema.CHKPTAB
+add heartbeattable
+
+
+ADD REPLICAT rep1, EXTTRAIL rt
+
+-- Create the parameter file for the Replicat group, load2
+EDIT PARAMS rep1
+
+REPLICAT rep1
+SETENV (PGCLIENTENCODING = "UTF8")
+SETENV (ODBCINI="/home/postgres/ODBC.ini")
+SETENV (NLS_LANG="AMERICAN_AMERICA.AL32UTF8")
+useridalias ggs_owner_aliasc
+SOURCECHARSET AL32UTF8
+DBOPTIONS ENABLE_INSTANTIATION_FILTERING
+MAP SOE.ADDRESSES, TARGET "SOE"."ADDRESSES";
+MAP SOE.CARD_DETAILS, TARGET "SOE"."CARD_DETAILS";
+MAP SOE.CUSTOMERS, TARGET "SOE"."CUSTOMERS";
+MAP SOE.INVENTORIES, TARGET "SOE"."INVENTORIES";
+MAP SOE.LOGON, TARGET "SOE"."LOGON";
+MAP SOE.ORDERENTRY_METADATA, TARGET "SOE"."ORDERENTRY_METADATA";
+MAP SOE.ORDERS, TARGET "SOE"."ORDERS";
+MAP SOE.ORDER_ITEMS, TARGET "SOE"."ORDER_ITEMS";
+MAP SOE.PRODUCT_DESCRIPTIONS, TARGET "SOE"."PRODUCT_DESCRIPTIONS";
+MAP SOE.PRODUCT_INFORMATION, TARGET "SOE"."PRODUCT_INFORMATION";
+MAP SOE.WAREHOUSES, TARGET "SOE"."WAREHOUSES";
+
+
+
+-- Start the Replicat process  -- Note the AFTERCSN clause
+
+start replicat rep1 aftercsn 2259446
+info replicat rep1
+
+
+-- on source server (o19cs)
+
+alter credentialstore add user ggma alias ggma_alias domain Network password slayer
+
+ADD DISTPATH ltrt SOURCE trail://o19cs:5003/services/v2/sources?trail=lt target ws://pg1:5004/services/v2/targets?trail=rt authentication useridalias ggma_alias domain Network
+
+START DISTPATH ltrt
+info distpath ltrt
+
+-- recuperate the last values of sequences before switch
+
+-- on target server (pg1)
+cd $HOME
+cd ora2pg_migrate
+
+
+cd ora_to_pg17/
+
+-- delete old values from the initial export
+rm -f ./schema/sequences/*.sql
+rm -f ./schema/sequence_values/*.sql
+
+-- extracting only sequence values
+
+ora2pg -p -t SEQUENCE -o sequence.sql -b ./schema/sequences -c ./config/ora2pg.conf 
+ora2pg -p -t SEQUENCE_VALUES -o sequence_value.sql -b ./schema/sequence_values -c ./config/ora2pg.conf 
+
+
+-- import only sequence values
+
+psql --single-transaction  -p 5432 -U SOE -d o19c -f ./schema/sequence_values/sequence_value.sql
+SET
+SET
+SET
+ALTER SEQUENCE
+ALTER SEQUENCE
+ALTER SEQUENCE
+ALTER SEQUENCE
+ALTER SEQUENCE
+
+-- stop and delete all
+
+-- on source server (o19cs)
+
+adminclient
+connect http://o19cs:5001 user ggma
+
+stop extract ext1
+delete extract ext1
+
+stop distpath ltrt
+delete distpath ltrt
+
+
+-- on target server (pg1)
+
+adminclient
+connect http://pg1:5001 as ggma
+
+stop replicat rep1
+delete replicat rep1
+
+

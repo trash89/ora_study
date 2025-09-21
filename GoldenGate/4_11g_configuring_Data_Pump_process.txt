@@ -1,0 +1,155 @@
+https://gavinsoorma.com.au/knowledge-base/oracle-goldengate-tutorial-6-configuring-data-pump-process/
+
+-- on GoldenGate 11g
+
+-- on source server (o11g)
+sqlplus / as sysdba << END
+drop user scott cascade;
+create user scott identified by tiger default tablespace users;
+grant connect,resource,unlimited tablespace to scott;
+CREATE TABLE scott.dummy(
+        dummy NUMBER
+);
+INSERT INTO scott.dummy VALUES(0);
+COMMIT;
+END
+
+-- on target server (o11g2)
+sqlplus / as sysdba << END
+drop user scott cascade;
+create user scott identified by tiger default tablespace users;
+grant connect,resource,unlimited tablespace to scott;
+CREATE TABLE scott.dummy(
+        dummy NUMBER
+);
+INSERT INTO scott.dummy VALUES(0);
+COMMIT;
+END
+
+
+-- on source server (o11g)
+
+cd $OGG_HOME
+ggsci
+
+-- Create the Extract process
+ADD EXTRACT ext1, TRANLOG, BEGIN NOW
+
+-- Create a local trail
+ADD EXTTRAIL /u01/app/oracle/product/gg/dirdat/lt, EXTRACT ext1
+
+-- Create the Data Pump group
+ADD EXTRACT dpump, EXTTRAILSOURCE /u01/app/oracle/product/gg/dirdat/lt
+
+-- Create the parameter file for the Primary Extract group
+EDIT PARAMS ext1
+
+EXTRACT ext1
+USERID ggs_owner, PASSWORD ggs_owner
+EXTTRAIL /u01/app/oracle/product/gg/dirdat/lt
+TABLE scott.dummy;
+
+
+-- Specify the location of the remote trail on the target system
+ADD RMTTRAIL /u01/app/oracle/product/gg/dirdat/rt, EXTRACT dpump
+
+-- Create the parameter file for the Data Pump group
+EDIT PARAMS dpump
+
+EXTRACT dpump
+USERID ggs_owner, PASSWORD ggs_owner
+RMTHOST o11g2, MGRPORT 7809
+RMTTRAIL /u01/app/oracle/product/gg/dirdat/rt
+PASSTHRU
+TABLE scott.dummy;
+
+
+
+-- on target server (o11g2)
+
+cd $OGG_HOME
+ggsci
+
+-- Create the Replicat group
+ADD REPLICAT rep1, EXTTRAIL /u01/app/oracle/product/gg/dirdat/rt
+
+-- Create the parameter file for the Replicat group
+EDIT PARAMS rep1
+
+REPLICAT rep1
+ASSUMETARGETDEFS
+USERID ggs_owner, PASSWORD ggs_owner
+MAP scott.dummy, TARGET scott.dummy;
+
+
+-- on source server (o11g)
+
+-- On the source system, now start the Extract and Data Pump processes.
+cd $OGG_HOME
+ggsci
+
+START EXTRACT ext1
+START EXTRACT dpump
+
+info extract ext1
+info extract dpump
+
+view report ext1
+view report dpump
+
+
+-- on target server (o11g2)
+
+cd $OGG_HOME
+ggsci
+
+-- Start the Replicat process
+START REPLICAT rep1
+STATUS REPLICAT rep1
+info replicat rep1
+view report rep1
+
+
+
+-- Test
+
+-- on source server (o11g)
+
+o11g:DB11G:DB11G:SYS
+SQL> insert into scott.dummy values (100);
+
+1 row created.
+
+o11g:DB11G:DB11G:SYS
+SQL> commit;
+
+Commit complete.
+
+
+-- on target server (o11g2)
+
+o11g2:DB11G:DB11G:SYS
+SQL> SELECT * FROM scott.dummy;
+
+     DUMMY
+----------
+	 0
+       100
+
+
+
+-- stopping and deleting
+
+-- on source server (o11g)
+DBLOGIN USERID ggs_owner, PASSWORD ggs_owner
+stop extract ext1
+delete extract ext1
+
+stop extract dpump
+delete extract dpump
+
+
+-- on target server (o11g2)
+DBLOGIN USERID ggs_owner, PASSWORD ggs_owner
+stop replicat rep1
+delete replicat rep1

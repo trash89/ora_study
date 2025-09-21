@@ -1,0 +1,220 @@
+12c Encryption
+This post gives a highlight of using TDE in 12c. For detail information refer advance security guide. In 12c the orapki/alter system commands related to key management has been replaced with ADMINISTER KEY MANAGEMENT commands.
+The first set of steps shows setting a non-CDB for use of TDE. 1. Create a location for wallet files (key store location).
+mkdir -p /opt/app/oracle/product/12.1.0/dbhome_1/network/admin/tde
+chmod 700 /opt/app/oracle/product/12.1.0/dbhome_1/network/admin/tde
+2. Add ENCRYPTION_WALLET_LOCATION to sqlnet.ora file
+ENCRYPTION_WALLET_LOCATION =
+  (SOURCE =
+   (METHOD = FILE)
+    (METHOD_DATA =
+     (DIRECTORY = /opt/app/oracle/product/12.1.0/dbhome_2/network/admin/tde)
+    )
+  )
+3. Create the software key store (wallet) by specifying key store location and password or key store (asanga123 in this case)
+SQL> ADMINISTER KEY MANAGEMENT CREATE KEYSTORE '/opt/app/oracle/product/12.1.0/dbhome_1/network/admin/tde' identified by asanga123;
+Result of this is a key store file (wallet file).
+SQL> ! ls
+ewallet.p12
+At this stage the status of the key store would be closed
+SQL> SELECT WRL_TYPE,STATUS,WALLET_TYPE,WALLET_ORDER,FULLY_BACKED_UP,CON_ID,WRL_PARAMETER FROM v$ENCRYPTION_WALLET;
+
+WRL_TYPE   STATUS   WALLET_TYPE   WALLET_OR FULLY_BAC     CON_ID WRL_PARAMETER
+---------- -------  ------------- --------- --------- ---------- -----------------------------------------------------------
+FILE       CLOSED   UNKNOWN       SINGLE    UNDEFINED          0 /opt/app/oracle/product/12.1.0/dbhome_1/network/admin/tde/ 
+4. Open the key store by providing the key store password
+SQL> ADMINISTER KEY MANAGEMENT SET KEYSTORE OPEN IDENTIFIED BY asanga123;
+keystore altered.
+
+SQL> SELECT WRL_TYPE,STATUS,WALLET_TYPE,WALLET_ORDER,FULLY_BACKED_UP,CON_ID,WRL_PARAMETER FROM v$ENCRYPTION_WALLET;
+
+WRL_TYPE   STATUS             WALLET_TYPE   WALLET_OR FULLY_BAC     CON_ID WRL_PARAMETER
+---------- ------------------ ------------- --------- --------- ---------- -----------------------------------------------------------
+FILE       OPEN_NO_MASTER_KEY PASSWORD      SINGLE    NO                 0 /opt/app/oracle/product/12.1.0/dbhome_1/network/admin/tde/ 
+5. Usually at this stage auto login key store is also created. But this lead to an issue (refer 1944507.1).
+SQL> ADMINISTER KEY MANAGEMENT SET KEY IDENTIFIED BY asanga123 WITH BACKUP;
+ADMINISTER KEY MANAGEMENT SET KEY IDENTIFIED BY asanga123 WITH BACKUP
+*
+ERROR at line 1:
+ORA-28417: password-based keystore is not open
+
+SQL> ADMINISTER KEY MANAGEMENT SET KEYSTORE open identified by asanga123;
+ADMINISTER KEY MANAGEMENT SET KEYSTORE open identified by asanga123
+*
+ERROR at line 1:
+ORA-28354: Encryption wallet, auto login wallet, or HSM is already open
+Therefore master encryption key is created before creating auto login wallet.
+SQL>  ADMINISTER KEY MANAGEMENT SET KEY IDENTIFIED BY asanga123 with backup ;
+keystore altered.
+This will change wallet status FROM open_no_master_key to open.
+SQL> SELECT WRL_TYPE,STATUS,WALLET_TYPE,WALLET_ORDER,FULLY_BACKED_UP,CON_ID,WRL_PARAMETER FROM v$ENCRYPTION_WALLET;
+
+WRL_TYPE   STATUS  WALLET_TYPE   WALLET_OR FULLY_BAC     CON_ID WRL_PARAMETER
+---------- ------- ------------- --------- --------- ---------- -----------------------------------------------------------
+FILE       OPEN    PASSWORD      SINGLE    NO                 0 /opt/app/oracle/product/12.1.0/dbhome_1/network/admin/tde/
+On the database alert log following could be observed
+Creating new database key for new master key and wallet
+Creating new database key with the new master key
+Retiring: ena 2 flag 6 mkloc 0
+   encrypted key 8dd09c987ef966198af992379477f13900000000000000000000000000000000
+   mkid b81a02de82664fbcbf2c9bcdcec4a3ae
+Creating: ena 2 flag e mkloc 1
+   encrypted key 92c72aeada0197dda6da3e4d64ac875c00000000000000000000000000000000
+   mkid ac6f7e2c97ff4fdfbf9d900a653e2c21
+Switching out all online logs for the new master key
+6. Finally create the auto login key store so that key store is auto opened when the database starts
+SQL> ADMINISTER KEY MANAGEMENT CREATE local AUTO_LOGIN KEYSTORE FROM KEYSTORE '/opt/app/oracle/product/12.1.0/dbhome_1/network/admin/tde' identified by asanga123;
+keystore altered.
+This will create the cwallet.sso file and wallet type will be changed to local_autologin
+SQL> ! ls
+cwallet.sso  ewallet_2015101517371593.p12  ewallet.p12  ewallet.p12.bak
+
+SELECT WRL_TYPE,STATUS,WALLET_TYPE,WALLET_ORDER,FULLY_BACKED_UP,CON_ID,WRL_PARAMETER FROM v$ENCRYPTION_WALLET;
+
+WRL_TYPE   STATUS WALLET_TYPE       WALLET_OR FULLY_BAC     CON_ID WRL_PARAMETER
+---------- ------ ----------------- --------- --------- ---------- -----------------------------------------------------------
+FILE       OPEN   LOCAL_AUTOLOGIN   SINGLE    NO                 0 /opt/app/oracle/product/12.1.0/dbhome_1/network/admin/tde/ 
+Encryption could be enabled on CDB with PDB same way as above. Below is an example of enabling TDE for CDB with two PDBs.
+SQL> show pdbs
+
+    CON_ID CON_NAME                       OPEN MODE  RESTRICTED
+---------- ------------------------------ ---------- ----------
+         2 PDB$SEED                       READ ONLY  NO
+         3 PDBONE                         READ WRITE NO
+         4 PDBTWO                         READ WRITE NO
+Create key store, open and set master encryption key.
+SQL> ADMINISTER KEY MANAGEMENT CREATE KEYSTORE '/opt/app/oracle/product/12.1.0/dbhome_1/network/admin/tde' identified by asanga123;
+keystore altered.
+
+SQL> ADMINISTER KEY MANAGEMENT SET KEYSTORE OPEN IDENTIFIED BY asanga123 container=all;
+keystore altered.
+
+SQL>  ADMINISTER KEY MANAGEMENT SET KEY IDENTIFIED BY asanga123 with backup container=all;
+keystore altered.
+
+SQL> SELECT WRL_TYPE,STATUS,WALLET_TYPE,WALLET_ORDER,FULLY_BACKED_UP,CON_ID,WRL_PARAMETER FROM v$ENCRYPTION_WALLET;
+
+WRL_TYPE   STATUS  WALLET_TYPE   WALLET_OR FULLY_BAC     CON_ID WRL_PARAMETER
+---------- ------- ------------- --------- --------- ---------- -----------------------------------------------------------
+FILE       OPEN    PASSWORD      SINGLE    NO                 0 /opt/app/oracle/product/12.1.0/dbhome_1/network/admin/tde/
+Enable auto login
+SQL> ADMINISTER KEY MANAGEMENT CREATE local AUTO_LOGIN KEYSTORE FROM KEYSTORE '/opt/app/oracle/product/12.1.0/dbhome_1/network/admin/tde' identified by asanga123;
+keystore altered.
+Login to a PDB and check the wallet status
+SQL> show con_name
+
+CON_NAME
+-----------
+PDBTWO
+
+SELECT WRL_TYPE,STATUS,WALLET_TYPE,WALLET_ORDER,FULLY_BACKED_UP,CON_ID,WRL_PARAMETER FROM v$ENCRYPTION_WALLET;
+
+WRL_TYPE   STATUS WALLET_TYPE       WALLET_OR FULLY_BAC     CON_ID WRL_PARAMETER
+---------- ------ ----------------- --------- --------- ---------- -----------------------------------------------------------
+FILE       OPEN   LOCAL_AUTOLOGIN   SINGLE    NO                 0 /opt/app/oracle/product/12.1.0/dbhome_1/network/admin/tde/ 
+v$encryption_keys view could be used to identify each containers key ids even though container id remains 0 for all.
+SQL> SELECT CON_ID,KEY_ID,KEYSTORE_TYPE,CREATOR_DBNAME,CREATOR_PDBNAME FROM v$encryption_keys;
+
+    CON_ID KEY_ID                                                 KEYSTORE_TYPE     CREATOR_DBNAME  CREATOR_PDBNAME
+---------- ------------------------------------------------------ ----------------- --------------- ------------------------------
+         0 AQugdpFHIk9yv1tQiZj0EhUAAAAAAAAAAAAAAAAAAAAAAAAAAAAA   SOFTWARE KEYSTORE PDBENC          CDB$ROOT
+         0 Af8ZFXnsWk+/v9Z4RFalEHwAAAAAAAAAAAAAAAAAAAAAAAAAAAAA   SOFTWARE KEYSTORE PDBENC          PDBONE
+         0 AU3e99wEOk8lv4QEBp4Ow3AAAAAAAAAAAAAAAAAAAAAAAAAAAAAA   SOFTWARE KEYSTORE PDBENC          PDBTWO
+Following test could be used to verify TDE is working. In this case a tablespace is created with encryption enabled. Few rows are inserted to tables created in those table spaces. At times buffer cache flushing or manual check points may be required to force database writer to write to data files
+SQL>  create tablespace enctest datafile size 10m ENCRYPTION DEFAULT STORAGE(ENCRYPT);
+Tablespace created.
+SQL>  create tablespace nonenctest datafile size 10m ;
+Tablespace created.
+
+SQL>SELECT TABLESPACE_NAME,ENCRYPTED FROM dba_tablespaces;
+
+TABLESPACE_NAME                ENC
+------------------------------ ---
+ENCTEST                        YES
+NONENCTEST                     NO
+
+create table enctable (a varchar2(100)) tablespace ENCTEST;
+create table nonecntbale (a varchar2(100)) tablespace NONENCTEST;
+
+begin
+  for i in 1 .. 100
+  loop
+  insert into enctable values ('top secret text');
+  insert into nonecntbale values ('top secret text');
+  end loop;
+  commit;
+  end;
+/
+alter system checkpoint;
+Strings command is used to look into the data file content.First the data file belonging to non-encrypted tablespace
+strings /opt/app/oracle/oradata/ENT12C1/datafile/o1_mf_nonencte_c1zsml08_.dbf
+top secret text,
+top secret text,
+Secondly the data file belonging to the encrypted tablespace
+strings /opt/app/oracle/oradata/ENT12C1/datafile/o1_mf_enctest_c1zsl0d9_.dbf
+Vj#>{
+O+l;2
+c1ax|
+        drl
+fzc1
+Lbqby%}
+u;Fa
+=B]Wv
+~/th
+9hHW
+=Jc;
+@s|J84
+|3M*
+2ATG
+As seen above encrypted tablespace doesn't show it's content in clear text.
+
+
+
+Encryption requires additional CPU. Next is a minor test that was done to compare the CPU usage for inserting to a encryption enabled tablespace vs non-encrypted tablespace.
+create table NOencryptiontbl(a number, b varchar2(100)) tablespace NONENCTEST;
+create table encryptiontbl(a number, b varchar2(100)) tablespace ENCTEST;
+  
+  begin
+    for i in 1 .. 1000000
+    loop
+    --insert into encryptiontbl values (i,'asdfghjkllqwertyuiopzxcvbnm134567890'||i);
+    insert into NOencryptiontbl values (i,'asdfghjkllqwertyuiopzxcvbnm134567890'||i);
+    commit;
+    end loop;
+  end;
+  /
+The inserts were first done on table created on non-encrypted and then on table created on encryption enabled tablespace. Value of CPU used by this session statistic was used to compare the CPU usage of each session once the inserts have completed. Graph below shows the CPU used, with TDE enabled it took on average 51 CPU seconds more for inserts to complete.
+
+
+If TDE is used in a data guard environment then the standby must have the key store (wallet) copied over FROM the primary. Without wallet open the recovery at standby will fail. In the below output datafile 17 was part of a encrypted tablespace created at primary.
+Datafile #17: '/opt/app/oracle/oradata/ENT12C1S/datafile/o1_mf_t2_bv215f2m_.dbf'
+kcrf_decrypt_redokey: wallet is not opened..(err 28365)
+Errors with log /opt/app/oracle/fast_recovery_area/ENT12C1S/archivelog/2015_07_23/o1_mf_1_2726_bv214gg4_.arc
+MRP0: Background Media Recovery terminated with error 28365
+Thu Jul 23 16:13:49 2015
+Errors in file /opt/app/oracle/diag/rdbms/ent12c1s/ent12c1s/trace/ent12c1s_pr00_2541.trc:
+ORA-28365: wallet is not open
+Managed Standby Recovery not using Real Time Apply
+Recovery interrupted!
+Recovered data files to a consistent state at change 41627576
+Thu Jul 23 16:13:50 2015
+Errors in file /opt/app/oracle/diag/rdbms/ent12c1s/ent12c1s/trace/ent12c1s_pr00_2541.trc:
+ORA-28365: wallet is not open
+Thu Jul 23 16:13:51 2015
+MRP0: Background Media Recovery process shutdown (ent12c1s)
+Another thing to watch out for is exporting using exp as oppose to expdp. Tables residing in encrypted tablespaces cannot be exported using exp.
+exp asanga/asa file=asa.dmp tables=p1,p2
+Connected to: Oracle Database 12c Enterprise Edition Release 12.1.0.2.0 - 64bit Production
+About to export specified tables via Conventional Path ...
+EXP-00111: Table P1 resides in an Encrypted Tablespace T2 and will not be exported
+EXP-00111: Table P2 resides in an Encrypted Tablespace T2 and will not be exported
+Export terminated successfully with warnings.
+Useful metalink notes
+TDE Wallet Problem in 12c: Cannot do a Set Key operation when an auto-login wallet is present [ID 1944507.1]
+Master Note For Transparent Data Encryption ( TDE ) [ID 1228046.1]
+How to migrate a non pluggable database that uses TDE to pluggable database ? [ID 1678525.1]
+Known TDE Wallet Issues [ID 1301365.1]
+Auto Login Wallet Cannot Be Closed [ID 1204604.1]
+Removing TDE, but V$ENCRYPTION_WALLET / GV$ENCRYPTION_WALLET still has rows. [ID 2003528.1]
+Step by Step Troubleshooting Guide for TDE Error ORA-28374 [ID 1541818.1]
+How To Import Encrypted Datapump Data FROM 11G To 12c DB [ID 1642059.1]

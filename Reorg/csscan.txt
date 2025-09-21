@@ -1,0 +1,49 @@
+sqlplus / as sysdba
+$ORACLE_HOME/rdbms/admin/csminst.sql
+exit
+
+CSSCAN "sys/password@db10g AS SYSDBA" FULL=Y
+
+Character Set Scanner v2.1 : Release 10.2.0.0.0 - Production on Tue Dec 5 07:00:36 2006
+
+Copyright (c) 1982, 2005, Oracle.  All rights reserved.
+
+Connected to:
+Oracle Database 10g Enterprise Edition Release 10.2.0.1.0 - Production
+With the Partitioning, OLAP and Data Mining options
+
+Current database character set is WE8MSWIN1252.
+
+Enter new database character set name: > WE8ISO8859P15
+
+Enter array fetch buffer size: 1024000 >
+
+Enter number of scan processes to utilize(1..32): 1 > 32
+
+Enumerating tables to scan...
+
+. process 1 scanning SYS.SOURCE$[AAAABIAABAAAAIRAAA]
+. process 2 scanning SYS.SOURCE$[AAAABIAABAAAHCJAAA]
+.
+.
+. process 14 scanning SYS.WRH$_SERVICE_WAIT_CLASS[AAANZRAADAAAJKBAAA]
+. process 22 scanning SYS.WRH$_WAITSTAT[AAANUxAADAAAHzJAAA]
+
+Creating Database Scan Summary Report...
+
+Creating Individual Exception Report...
+
+Scanner terminated successfully.
+
+
+
+sqlplus / as sysdba
+SHUTDOWN IMMEDIATE
+STARTUP RESTRICT
+$ORACLE_HOME/rdbms/admin/csalter.plb
+exit
+
+sqlplus / as sysdba
+SHUTDOWN IMMEDIATE
+STARTUP
+exit

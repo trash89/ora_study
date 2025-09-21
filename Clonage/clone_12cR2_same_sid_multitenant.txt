@@ -1,0 +1,167 @@
+-- multitenant databases (cdb1)
+
+-- same database SID as the target(source)
+
+-- on the source server (o12c), change the SYS and SYSTEM password
+
+sqlplus / as sysdba <<END
+alter user sys identified by "manager123*";
+alter user system identified by "manager123*";
+END
+
+-- verify if TDE is in place for the source database
+sqlplus / as sysdba<<END
+@show_tde
+END
+
+v$encryption_wallet
+Con STATUS			   WRL_TYPE		WALLET_TYPE	     W order   Backuped  WRL_PARAMETER
+--- ------------------------------ -------------------- -------------------- --------- --------- --------------------------------------------------------------------------------
+  1 OPEN			   FILE 		AUTOLOGIN	     SINGLE    NO	 /u01/app/oracle/admin/cdb1/encryption_keystore/
+
+v$encryption_keys
+Con KEY_ID								   TAG				  USER				 KEY_USE    KEYSTORE_TYPE     BACKED_UP
+--- ---------------------------------------------------------------------- ------------------------------ ------------------------------ ---------- ----------------- ---------
+  1 AU2P7wIDmU91vxBo2OmqQ9gAAAAAAAAAAAAAAAAAAAAAAAAAAAAA		   first master key cdb 	  SYS				 TDE IN PDB SOFTWARE KEYSTORE NO
+  3 AcbG5yOxKE9yv/b0nTTGnOUAAAAAAAAAAAAAAAAAAAAAAAAAAAAA		   first master key cdb 	  SYS				 TDE IN PDB SOFTWARE KEYSTORE NO
+
+Creation Time	    Activation Time	Creator:DBNAME/PDBNAME				   Activating:DBNAME/PDBNAME
+------------------- ------------------- -------------------------------------------------- --------------------------------------------------
+05/03/2025 17:25:42 05/03/2025 17:25:42 cdb1/CDB$ROOT					   cdb1/CDB$ROOT
+05/03/2025 17:25:42 05/03/2025 17:25:42 cdb1/PDB1					   cdb1/PDB1
+
+2 rows SELECTed.
+
+
+sys.x$kcbdbk, if mkloc == 0, no encryption enabled
+Con	 MKLOC
+--- ----------
+  1	     1
+  2	     0
+  3	     1
+
+
+-- on the standby server (o12c2)
+
+-- remove old database
+rm -rf /u01/app/oracle/admin/cdb1/*
+rm -rf /u01/app/oracle/admin/CDB1/*
+rm -rf /u01/app/oracle/audit/cdb1/*
+rm -rf /u01/app/oracle/audit/CDB1/*
+rm -rf /u01/app/oracle/diag/rdbms/cdb1/*
+rm -rf /u01/app/oracle/fast_recovery_area/CDB1/*
+rm -rf /u01/app/oracle/fast_recovery_area/cdb1/*
+rm -rf /u02/oradata/cdb1/*
+rm -rf /u02/oradata/CDB1/*
+rm -f $ORACLE_HOME/dbs/lkCDB1
+rm -f $ORACLE_HOME/dbs/orapwcdb1
+rm -f $ORACLE_HOME/dbs/initcdb1.ora
+rm -f $ORACLE_HOME/dbs/spfilecdb1.ora
+rm -f $ORACLE_HOME/dbs/snapcf_cdb1.f
+rm -f $ORACLE_HOME/dbs/hc_cdb1.dat
+rm -f $ORACLE_HOME/rdbms/log/*cdb1*
+rmdir /u01/app/oracle/admin/cdb1
+rmdir /u01/app/oracle/admin/CDB1
+rmdir /u01/app/oracle/audit/cdb1
+rmdir /u01/app/oracle/audit/CDB1
+rmdir /u01/app/oracle/diag/rdbms/cdb1
+rmdir /u01/app/oracle/fast_recovery_area/cdb1
+rmdir /u01/app/oracle/fast_recovery_area/CDB1
+rmdir /u02/oradata/cdb1
+rmdir /u02/oradata/CDB1
+
+
+-- re-create the folders
+mkdir -p /u01/app/oracle/admin/cdb1/adump
+mkdir -p /u01/app/oracle/admin/CDB1/adump
+mkdir -p /u01/app/oracle/admin/cdb1/wallet
+mkdir -p /u01/app/oracle/admin/CDB1/wallet
+mkdir -p /u01/app/oracle/admin/cdb1/xdb_wallet
+mkdir -p /u01/app/oracle/admin/CDB1/xdb_wallet
+mkdir -p /u01/app/oracle/admin/cdb1/encryption_keystore/
+mkdir -p /u01/app/oracle/audit/cdb1
+mkdir -p /u01/app/oracle/audit/CDB1
+mkdir -p /u01/app/oracle/diag/rdbms/cdb1/cdb1
+mkdir -p /u01/app/oracle/diag/rdbms/cdb1/CDB1
+mkdir -p /u01/app/oracle/fast_recovery_area/cdb1/flashback
+mkdir -p /u01/app/oracle/fast_recovery_area/CDB1/flashback
+mkdir -p /u02/oradata/cdb1/changetracking
+mkdir -p /u02/oradata/CDB1/changetracking
+
+
+-- transfer the TDE keys
+
+scp oracle@o12c:/u01/app/oracle/admin/cdb1/wallet/* oracle@o12c2:/u01/app/oracle/admin/cdb1/wallet
+
+scp oracle@o12c:/u01/app/oracle/admin/cdb1/xdb_wallet/* oracle@o12c2:/u01/app/oracle/admin/cdb1/xdb_wallet
+
+scp oracle@o12c:/u01/app/oracle/admin/cdb1/encryption_keystore/* oracle@o12c2:/u01/app/oracle/admin/cdb1/encryption_keystore
+
+-- adjust the sqlnet.ora file like the primary server
+vi $ORACLE_HOME/network/admin/sqlnet.ora
+
+NAMES.DIRECTORY_PATH= (TNSNAMES, EZCONNECT)
+
+ENCRYPTION_WALLET_LOCATION=
+  (SOURCE=(METHOD=FILE)(METHOD_DATA=
+    (DIRECTORY=/u01/app/oracle/admin/cdb1/encryption_keystore/)))
+
+-- restart the listener
+
+lsnrctl stop
+lsnrctl start
+
+export ORACLE_SID=cdb1
+orapwd file=$ORACLE_HOME/dbs/orapwcdb1 password=manager123* force=y format=12.2
+
+-- Create an init.ora file
+
+echo "*.db_name='cdb1'"          >$ORACLE_HOME/dbs/initcdb1.ora
+echo "*.compatible='12.2.0'"    >>$ORACLE_HOME/dbs/initcdb1.ora
+
+sqlplus / as sysdba <<END
+startup nomount;
+create spfile FROM pfile;
+END
+
+rman target=sys/manager123*@o12c:1521/cdb1 auxiliary=sys/manager123*@o12c2:1521/cdb1 <<END
+run{
+ALLOCATE CHANNEL tgt1 TYPE DISK;
+ALLOCATE CHANNEL tgt2 TYPE DISK;
+ALLOCATE CHANNEL tgt3 TYPE DISK;
+ALLOCATE CHANNEL tgt4 TYPE DISK;
+ALLOCATE AUXILIARY CHANNEL dup1 TYPE DISK;
+ALLOCATE AUXILIARY CHANNEL dup2 TYPE DISK;
+ALLOCATE AUXILIARY CHANNEL dup3 TYPE DISK;
+ALLOCATE AUXILIARY CHANNEL dup4 TYPE DISK;
+DUPLICATE TARGET DATABASE TO cdb1
+FROM ACTIVE DATABASE
+SPFILE
+PARAMETER_VALUE_CONVERT
+    '/u01/app/oracle/admin/cdb1','/u01/app/oracle/admin/cdb1',
+    '/u01/app/oracle/fast_recovery_area/CDB1','/u01/app/oracle/fast_recovery_area/cdb1',
+    '/u01/app/oracle/fast_recovery_area/cdb1','/u01/app/oracle/fast_recovery_area/cdb1',    
+    '/u02/oradata/CDB1', '/u02/oradata/cdb1',
+    '/u02/oradata/cdb1', '/u02/oradata/cdb1'
+SET DB_FILE_NAME_CONVERT
+    '/u02/oradata/CDB1', '/u02/oradata/cdb1',
+    '/u02/oradata/CDB1/pdb1','/u02/oradata/cdb1/pdb1',
+    '/u02/oradata/cdb1', '/u02/oradata/cdb1'
+SET LOG_FILE_NAME_CONVERT
+    '/u02/oradata/CDB1', '/u02/oradata/cdb1',
+    '/u02/oradata/cdb1', '/u02/oradata/cdb1'
+USING COMPRESSED BACKUPSET
+SECTION SIZE 1G
+NOFILENAMECHECK;
+}
+END
+
+-- Test the TDE
+o12c2:PDB1:CDB1:SYS
+SQL> SELECT * FROM test.tde_test;
+
+	ID DATA
+---------- --------------------------------------------------
+	 1 This is a secret!
+
+o12c2:PDB1:CDB1:SYS

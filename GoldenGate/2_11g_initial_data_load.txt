@@ -1,0 +1,115 @@
+https://gavinsoorma.com.au/knowledge-base/oracle-goldengate-tutorial-4-performing-initial-data-load/
+
+-- on GoldenGate 11g
+
+-- on source server (o11g)
+
+sqlplus / as sysdba << END
+drop user scott cascade;
+create user scott identified by tiger default tablespace users;
+grant connect,resource,unlimited tablespace to scott;
+CREATE TABLE scott.dummy(
+        dummy NUMBER
+);
+INSERT INTO scott.dummy VALUES(0);
+COMMIT;
+END
+
+-- on target server (o11g2)
+sqlplus / as sysdba << END
+drop user scott cascade;
+create user scott identified by tiger default tablespace users;
+grant connect,resource,unlimited tablespace to scott;
+CREATE TABLE scott.dummy(
+        dummy NUMBER
+);
+END
+
+
+-- on source server (o11g)
+
+-- Create the Initial data extract process load1
+
+cd $OGG_HOME
+ggsci
+
+ADD EXTRACT ext1, SOURCEISTABLE
+
+-- Create the parameter file for the extract group load1
+EDIT PARAMS ext1
+
+EXTRACT ext1
+setenv (NLS_LANG="AMERICAN_AMERICA.WE8ISO8859P15")
+USERID ggs_owner, PASSWORD ggs_owner
+RMTHOST o11g2, MGRPORT 7809
+RMTTASK replicat, GROUP rep1
+TABLE scott.dummy;
+
+
+-- on target server (o11g2)
+
+-- Create the initial data load task load2
+
+cd $OGG_HOME
+ggsci
+
+ADD REPLICAT rep1, SPECIALRUN
+
+-- Create the parameter file for the Replicat group, load2
+EDIT PARAMS rep1
+
+REPLICAT rep1
+USERID ggs_owner, PASSWORD ggs_owner
+ASSUMETARGETDEFS
+MAP scott.dummy, TARGET scott.dummy;
+
+
+-- on source server (o11g)
+o11g:DB11G:DB11G:SYS
+SQL> SELECT count(*) FROM scott.dummy;
+
+  COUNT(*)
+----------
+	 1
+
+
+-- on target server (o11g2)
+o11g2:DB11G:DB11G:SYS
+SQL> SELECT count(*) FROM scott.dummy;
+
+  COUNT(*)
+----------
+	 0
+
+-- on source server (o11g)
+
+-- Start the initial load data extract task on the source system
+cd $OGG_HOME
+ggsci
+
+start extract ext1
+info extract ext1
+view report ext1
+
+
+
+-- on target server (o11g2)
+
+o11g2:DB11G:DB11G:SYS
+SQL> SELECT count(*) FROM scott.dummy;
+
+  COUNT(*)
+----------
+	 1
+
+-- stopping and deleting
+
+-- on source server (o11g)
+DBLOGIN USERID ggs_owner, PASSWORD ggs_owner
+stop extract ext1
+delete extract ext1
+
+-- on target server (o11g2)
+DBLOGIN USERID ggs_owner, PASSWORD ggs_owner
+stop replicat rep1
+delete replicat rep1

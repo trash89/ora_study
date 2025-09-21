@@ -1,0 +1,61 @@
+-- 1
+https://gavinsoorma.com.au/knowledge-base/goldengate-installation-oracle-11g-on-red-hat-linux/
+
+-- 2
+https://gavinsoorma.com.au/knowledge-base/oracle-goldengate-tutorial-4-performing-initial-data-load/
+
+-- 3
+https://gavinsoorma.com.au/knowledge-base/oracle-goldengate-tutorial-5-configuring-online-change-synchronization/
+
+-- 4
+https://gavinsoorma.com.au/knowledge-base/oracle-goldengate-tutorial-6-configuring-data-pump-process/
+
+-- 5
+https://gavinsoorma.com.au/knowledge-base/oracle-goldengate-tutorial-7-configuring-ddl-synchronization/
+
+-- 6
+https://gavinsoorma.com.au/knowledge-base/goldengate-online-change-synchronization-with-the-initial-data-load/
+
+-- 7
+https://gavinsoorma.com.au/knowledge-base/platform-migration-and-database-upgrade-FROM-oracle-9i-to-oracle-11g-using-goldengate/
+
+-- 8
+https://gavinsoorma.com.au/knowledge-base/goldengate-encrypting-data-and-passwords/
+
+-- 9
+https://gavinsoorma.com.au/knowledge-base/using-the-format-release-parameter-to-handle-goldengate-version-differences/
+
+-- 10
+https://gavinsoorma.com.au/knowledge-base/using-goldengate-12c-with-an-oracle-12c-multitenant-database/
+
+-- 11
+https://gavinsoorma.com.au/knowledge-base/oracle-goldengate-12-2-new-feature-integration-with-oracle-datapump/
+
+-- 12
+https://gavinsoorma.com.au/knowledge-base/goldengate-integrated-capture-mode/
+
+-- 13
+https://gavinsoorma.com.au/knowledge-base/goldengate-12c-new-feature-integrated-replicat/
+
+-- 14
+https://gavinsoorma.com.au/knowledge-base/12c-goldengate-new-feature-coordinated-replicat/
+
+-- 15 TODO
+https://gavinsoorma.com.au/knowledge-base/oracle-goldengate-12c-release-3-new-feature-parallel-replicat/
+
+-- 16 Connecting MA to Classic
+https://docs.oracle.com/en/middleware/goldengate/core/12.3.0.1/ggsau/connecting-ma-classic1.html
+
+-- 17 Connecting Classic to MA
+https://docs.oracle.com/en/middleware/goldengate/core/12.3.0.1/ggsau/connecting-classic-ma.html
+
+
+
+-- TODO
+https://gavinsoorma.com.au/knowledge-base/goldengate-integrated-capture-using-downstream-mining-database/
+https://gavinsoorma.com.au/knowledge-base/configuring-a-downstream-capture-database-for-oracle-goldengate/
+
+
+https://fatdba.com/2024/05/31/replication-between-oracle-postgresql-using-oracle-golden-gate/
+
+https://fatdba.com/tag/golden-gate/

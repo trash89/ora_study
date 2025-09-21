@@ -1,0 +1,242 @@
+https://gavinsoorma.com.au/knowledge-base/goldengate-integrated-capture-mode/
+
+GoldenGate Integrated Capture Mode
+One of the new features in GoldenGate 11g is the Integrated Capture mode.
+
+In the earlier classic capture mode, the Oracle GoldenGate Extract process captures data changes FROM the Oracle redo or archive log files on the source system.
+In integrated capture mode, the Oracle GoldenGate Extract process interacts directly with the database log mining server which mines or reads the database redo log files
+and captures the changes in the form of Logical Change Records (LCR’s) which are FROM there written to the GoldenGate trail files.
+
+The basic difference is that in the Integrated Capture mode, the extract process does not directly read the redo log files. 
+That part of the job is done by the logmining server residing in the Oracle database.
+
+Integrated capture supports more data types as well as compressed data and as it is fully integrated with the database there is no additional setup steps 
+required when we are configuring GoldenGate with things like RAC, ASM and TDE (Transparent Data Encryption)
+
+In the integrated capture mode there are two deployment options:
+
+a) Local deployment
+b) Downstream deployment
+
+Basically it depends on WHERE the log mining server is deployed.
+
+In the Local deployment, the source database and the log mining server are the same database.
+
+In downstream deployment, the source and log mining databases are different databases. 
+The source database uses redo transport to ship the archived redo log files to the ‘downstream’ database WHERE the log mining server is residing. 
+The log mining server extracts changes in the form of logical change records and these are then processed by GoldenGate and written to the trail files.
+
+So in the downstream integrated capture mode, we offload any overhead associated with the capture or transformation FROM the source database 
+to the downstream database which may be used only for GoldenGate processing and not for any production user connections.
+
+
+-- on Oracle GoldenGate Version 23.4.1.24.05 OGGCORE_23.4.0.0.0OGGR_LINUX.X64_240529.0500_FBO
+
+-- on source server (o12c)
+sqlplus / as sysdba << END
+drop user scott cascade;
+create user scott identified by tiger default tablespace users;
+grant connect,resource,unlimited tablespace to scott;
+CREATE TABLE scott.myobjects as SELECT * FROM all_objects WHERE 0=1;
+create sequence scott.seq1 start with 1 increment by 1 nocycle;
+END
+
+-- on target server (o12c2)
+sqlplus / as sysdba << END
+drop user scott cascade;
+create user scott identified by tiger default tablespace users;
+grant connect,resource,unlimited tablespace to scott;
+CREATE TABLE scott.myobjects as SELECT * FROM all_objects WHERE 0=1;
+create sequence scott.seq1 start with 1 increment by 1 nocycle;
+END
+
+
+-- on source server (o12c)
+adminclient
+connect http://o12c:5001 user ggma
+start deployment udepl1
+connect http://o12c:5001 user ggma
+
+-- create the aliases for database and network
+alter credentialstore add user ggs_owner@o12c:1521/ORCL password ggs_owner alias ggs_owner_alias
+alter credentialstore add user ggma alias ggma_alias domain Network password slayer
+
+-- login to database, create heartbeattable, checkpointtable and trandata for schema SCOTT
+dblogin useridalias ggs_owner_alias
+add heartbeattable
+ADD CHECKPOINTTABLE GGS_OWNER.CHKPTAB
+ADD SCHEMATRANDATA scott ALLCOLS PREPARECSN NOWAIT
+
+
+dblogin useridalias ggs_owner_alias
+
+ADD EXTRACT intext INTEGRATED TRANLOG, BEGIN NOW
+
+EDIT PARAMS intext
+
+-- GETAPPLOPS is deprecated
+EXTRACT intext
+useridalias ggs_owner_alias
+TRANLOGOPTIONS ENABLE_AUTO_CAPTURE INTEGRATEDPARAMS (MAX_SGA_SIZE 100)
+EXTTRAIL lt
+DDL INCLUDE all
+DDLOPTIONS REPORT
+TABLE scott.*;
+SEQUENCE scott.*;
+
+ADD EXTTRAIL lt, EXTRACT intext
+
+REGISTER EXTRACT intext DATABASE
+
+
+start extract intext
+info extract intext
+view report intext
+
+info all
+
+
+
+-- old protocol ogg
+-- ADD DISTPATH ltrt SOURCE trail://o12c:5003/services/v2/sources?trail=lt target ogg://o12c2:5004/services/v2/targets?trail=rt
+
+ADD DISTPATH ltrt SOURCE trail://o12c:5003/services/v2/sources?trail=lt target ws://o12c2:5004/services/v2/targets?trail=rt authentication useridalias ggma_alias domain Network
+
+START DISTPATH ltrt
+info distpath ltrt
+
+-- on target server (o12c2)
+
+adminclient
+connect http://o12c2:5001 user ggma
+start deployment udepl1
+connect http://o12c2:5001 user ggma
+
+-- create the aliases database and network
+alter credentialstore add user ggs_owner@o12c2:1521/ORCL password ggs_owner alias ggs_owner_alias
+-- not required, only for equivalet config between o12c and o12c2
+alter credentialstore add user ggma alias ggma_alias domain Network password slayer
+
+-- login to pdb database, create heartbeattable, checkpointtable and trandata for schema SCOTT
+dblogin useridalias ggs_owner_alias
+add heartbeattable
+ADD CHECKPOINTTABLE GGS_OWNER.CHKPTAB
+ADD SCHEMATRANDATA scott ALLCOLS PREPARECSN NOWAIT
+
+
+dblogin useridalias ggs_owner_alias
+
+
+-- Create the Replicat group
+ADD REPLICAT rep1, EXTTRAIL rt, CHECKPOINTTABLE GGS_OWNER.CHKPTAB
+
+-- Create the parameter file for the Replicat group
+EDIT PARAMS rep1
+
+REPLICAT rep1
+DISCARDFILE REP1.dsc, PURGE, MEGABYTES 4000
+ASSUMETARGETDEFS
+useridalias ggs_owner_alias
+DDL INCLUDE all
+DDLERROR default discard
+REPERROR (default,discard)
+DDLOPTIONS REPORT
+MAP scott.*, TARGET scott.*;
+
+
+start replicat rep1
+info replicat rep1
+view report rep1
+
+-- test 
+
+-- on source server (o12c)
+
+o12c:ORCL:ORCL:SYS
+SQL> SELECT count(*) FROM scott.myobjects;
+
+  COUNT(*)
+----------
+	 0
+
+o12c:ORCL:ORCL:SYS
+SQL> insert into scott.myobjects SELECT * FROM all_objects;
+
+71745 rows created.
+
+o12c:ORCL:ORCL:SYS
+SQL> commit;
+
+Commit complete.
+
+o12c:ORCL:ORCL:SYS
+SQL> create table scott.myobjects2 as SELECT * FROM all_objects WHERE owner!='SYS';
+
+Table created.
+
+o12c:ORCL:ORCL:SYS
+SQL> SELECT scott.seq1.nextval FROM dual;
+
+   NEXTVAL
+----------
+	 1
+
+o12c:ORCL:ORCL:SYS
+SQL> /
+
+   NEXTVAL
+----------
+	 2
+
+o12c:ORCL:ORCL:SYS
+SQL> SELECT scott.seq1.currval FROM dual;
+
+   CURRVAL
+----------
+	 2
+
+
+-- on target server (o12c2)
+
+o12c2:ORCL:ORCL:SYS
+SQL> SELECT count(*) FROM scott.myobjects;
+
+  COUNT(*)
+----------
+     71745
+
+o12c2:ORCL:ORCL:SYS
+SQL> SELECT count(*) FROM scott.myobjects2;
+
+  COUNT(*)
+----------
+     20711
+
+o12c2:ORCL:ORCL:SYS
+SQL> @seq
+Owner?(%)      : SCOTT
+
+dba_sequences
+Sequence							       Last Number	       Min Value  IncrBy      Cache Cycle Order Scale Extend Sess  Keep
+------------------------------------------------------------ --------------------- --------------------- ------- ---------- ----- ----- ----- ------ ----- -----
+SCOTT.SEQ1									 2		       1       1	  0 N	  N	N     N      N	   N
+
+1 row SELECTed.
+
+
+-- stopping and deleting
+
+-- on source server (o12c)
+
+dblogin useridalias ggs_owner_alias
+stop extract intext
+unregister EXTRACT intext DATABASE
+delete extract intext
+
+stop distpath ltrt
+delete distpath ltrt
+
+-- on target server (o12c2)
+dblogin useridalias ggs_owner_alias
+stop replicat rep1
+delete replicat rep1

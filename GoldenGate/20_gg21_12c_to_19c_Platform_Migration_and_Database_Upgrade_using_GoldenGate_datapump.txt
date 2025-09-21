@@ -1,0 +1,625 @@
+-- source server: o12c(oracle 12.2), target server: o19cs(oracle 19c), gg server: gg21(goldengate 21)
+- source database --> goldengate server --> target database
+
+-- This is a change synchronization technique, with the target database instantiation using expdp/impdp method
+-- this procedure is to be used for big databases with high transactional activity and low interruption of service
+-- use of parallel integrated extract and parallel integrated replicat for quick catch up of delta transactions (source database >11g and GG >12.2)
+
+
+Oracle GoldenGate — Oracle RDBMS Server Recommended Patches (Doc ID 1557031.1)
+Latest GoldenGate/Database (OGG/RDBMS) Patch recommendations (Doc ID 2193391.1)
+
+
+---------- prepare the source database ---------------------------
+
+
+-- on the source server (o12c)
+
+-- create SOE user and schema using oewizard from swingbench
+./oewizard -cl -create -dt thin -nc -cs o12c:1521/ORCL -u soe -p soe -scale 1 -tc 2 -dba "sys as sysdba" -dbap manager -ts SOE_DATA -normalfile -df "/u02/oradata/ORCL/soe_data01.dbf"
+
+-- run the bench
+./charbench -c ../configs/SOE_Server_Side_V2.xml -u soe -p soe -uc 4 -cs o12c:1521/ORCL -min 0 -max 10 -intermin 200 -intermax 500 -v users,tpm,tps,errs,vresp
+
+
+-- activate the constraints that are not validated, especially the PK constraints
+SQL> @constr_not_valid
+Owner?(%)      : SOE
+
+dba_constraints
+Constraint Name 	             C Table				                  Search Cond.						                                Status	 Deferrable	    Deferred  Validated	    Generated      Bad Rely Invalid
+------------------------------ - ------------------------------ ------------------------------------------------------- -------- -------------- --------- ------------- -------------- --- ---- -------
+ADDRESS_PK		                 P ADDRESSES                                                                              ENABLED  NOT DEFERRABLE IMMEDIATE NOT VALIDATED USER NAME
+ADD_CUST_FK		                 R ADDRESSES										                                                          ENABLED  DEFERRABLE	    IMMEDIATE NOT VALIDATED USER NAME
+CARD_DETAILS_PK 	             P CARD_DETAILS										                                                        ENABLED  NOT DEFERRABLE IMMEDIATE NOT VALIDATED USER NAME
+CUSTOMERS_PK		               P CUSTOMERS										                                                          ENABLED  NOT DEFERRABLE IMMEDIATE NOT VALIDATED USER NAME
+CUSTOMER_CREDIT_LIMIT_MAX      C CUSTOMERS			                 credit_limit <= 50000					                        ENABLED  DEFERRABLE	    IMMEDIATE NOT VALIDATED USER NAME
+CUSTOMER_ID_MIN 	             C CUSTOMERS			                 customer_id > 0 					                              ENABLED  DEFERRABLE	    IMMEDIATE NOT VALIDATED USER NAME
+INVENTORIES_PRODUCT_ID_FK      R INVENTORIES										                                                        ENABLED  NOT DEFERRABLE IMMEDIATE NOT VALIDATED USER NAME
+INVENTORIES_WAREHOUSES_FK      R INVENTORIES										                                                        ENABLED  NOT DEFERRABLE IMMEDIATE NOT VALIDATED USER NAME
+INVENTORY_PK		               P INVENTORIES										                                                        ENABLED  NOT DEFERRABLE IMMEDIATE NOT VALIDATED USER NAME
+ORDERS_CUSTOMER_ID_FK	         R ORDERS 										                                                            ENABLED  NOT DEFERRABLE IMMEDIATE NOT VALIDATED USER NAME
+ORDER_MODE_LOV		             C ORDERS 			                   order_mode in ('direct','online')			                ENABLED  DEFERRABLE	    IMMEDIATE NOT VALIDATED USER NAME
+ORDER_PK		                   P ORDERS 										                                                            ENABLED  NOT DEFERRABLE IMMEDIATE NOT VALIDATED USER NAME
+ORDER_TOTAL_MIN 	             C ORDERS 			                   order_total >= 0					                              ENABLED  DEFERRABLE	    IMMEDIATE NOT VALIDATED USER NAME
+ORDER_ITEMS_ORDER_ID_FK        R ORDER_ITEMS										                                                        ENABLED  NOT DEFERRABLE IMMEDIATE NOT VALIDATED USER NAME
+ORDER_ITEMS_PK		             P ORDER_ITEMS										                                                        ENABLED  NOT DEFERRABLE IMMEDIATE NOT VALIDATED USER NAME
+ORDER_ITEMS_PRODUCT_ID_FK      R ORDER_ITEMS										                                                        ENABLED  NOT DEFERRABLE IMMEDIATE NOT VALIDATED USER NAME
+PRODUCT_DESCRIPTIONS_PK        P PRODUCT_DESCRIPTIONS									                                                  ENABLED  NOT DEFERRABLE IMMEDIATE NOT VALIDATED USER NAME
+WAREHOUSES_PK		               P WAREHOUSES										                                                          ENABLED  NOT DEFERRABLE IMMEDIATE NOT VALIDATED USER NAME
+
+-- validate the PK constraints
+alter table soe.ADDRESSES enable validate constraint ADDRESS_PK;
+alter table soe.CARD_DETAILS enable validate constraint CARD_DETAILS_PK;
+alter table soe.CUSTOMERS enable validate constraint CUSTOMERS_PK;
+alter table soe.INVENTORIES enable validate constraint INVENTORY_PK;
+alter table soe.ORDERS enable validate constraint ORDER_PK;
+alter table soe.ORDER_ITEMS enable validate constraint ORDER_ITEMS_PK;
+alter table soe.PRODUCT_DESCRIPTIONS enable validate constraint PRODUCT_DESCRIPTIONS_PK;
+alter table soe.WAREHOUSES enable validate constraint WAREHOUSES_PK;
+
+-- validate the other constraints
+alter table soe.ADDRESSES enable validate constraint  ADD_CUST_FK;
+-- alter table soe.CUSTOMERS enable validate constraint CUSTOMER_CREDIT_LIMIT_MAX;
+alter table soe.CUSTOMERS enable validate constraint CUSTOMER_ID_MIN;
+alter table soe.INVENTORIES enable validate constraint INVENTORIES_PRODUCT_ID_FK;
+alter table soe.INVENTORIES enable validate constraint INVENTORIES_WAREHOUSES_FK;
+alter table soe.ORDERS enable validate constraint ORDERS_CUSTOMER_ID_FK;
+alter table soe.ORDERS enable validate constraint ORDER_MODE_LOV;
+alter table soe.ORDERS enable validate constraint ORDER_TOTAL_MIN;
+alter table soe.ORDER_ITEMS enable validate constraint ORDER_ITEMS_ORDER_ID_FK;
+alter table soe.ORDER_ITEMS enable validate constraint ORDER_ITEMS_PRODUCT_ID_FK;
+
+-- set the logging attibute for tables and indexes
+@setlogging
+
+
+-- on the source server (o12c)
+
+-- delete old ggs_owner user
+cd /u01/app/oracle/product/gg23/lib/sql/legacy
+sqlplus / as sysdba
+SQL> @ddl_remove
+Enter Oracle GoldenGate schema name:GGS_OWNER
+SQL> @marker_remove
+Enter Oracle GoldenGate schema name:GGS_OWNER
+SQL> @remove_seq
+Please enter the name of a schema for the GoldenGate database objects:
+GGS_OWNER
+Setting schema name to GGS_OWNER
+SQL> drop user ggs_owner cascade;
+
+User dropped.
+
+-- configure the init.ora parameters for GoldenGate
+
+sqlplus / as sysdba  <<END
+startup;
+alter system set enable_goldengate_replication=true scope=both;
+alter system set streams_pool_size=1G scope=both;
+alter database force logging;
+alter database add supplemental log data (primary key,unique,foreign key,all) columns;
+alter system switch logfile;
+alter system switch logfile;
+alter system set undo_management=auto;
+alter system set undo_retention = 86400; -- 86400 seconds = 24 hours
+alter system switch logfile;
+create pfile from spfile;
+END
+
+
+-- create the gg_data tablespace and the ggs_owner user
+sqlplus / as sysdba << END
+create tablespace GG_DATA datafile '/u02/oradata/ORCL/gg_data01.dbf' size 1m autoextend on next 1m;
+create user GGS_OWNER identified by GGS_OWNER default tablespace GG_DATA temporary tablespace temp;
+grant connect,resource,dba  to GGS_OWNER;
+grant create session        to GGS_OWNER;
+grant flashback any table   to GGS_OWNER;
+exec dbms_goldengate_auth.grant_admin_privilege('GGS_OWNER');
+exec dbms_streams_auth.grant_admin_privilege('GGS_OWNER');
+END
+
+
+
+Steps to disable the “auto space advisor”
+
+1. Check the status of the “auto space advisor”.
+
+SQL> SELECT client_name, status FROM dba_autotask_client;
+set lines 180 pages 1000
+col client_name for a40
+col attributes for a60
+select client_name, status,attributes,service_name from dba_autotask_client;
+2. Execute the below to disable the “auto space advisor”.
+
+BEGIN
+DBMS_AUTO_TASK_ADMIN.disable(
+client_name => 'auto space advisor',
+operation => NULL,
+window_name => NULL);
+END;
+/
+
+3. Check if the “auto space advisor” is disabled.
+
+set lines 180 pages 1000
+col client_name for a40
+col attributes for a60
+select client_name, status,attributes,service_name from dba_autotask_client;
+
+Remote Capture – OGG-00446 Could Not Find Archived Log
+Install Oracle Client 11.2.0.4 and use the parameter TRANLOGOPTIONS DBLOGREADER in the Extract process parameter file. Restart the Extract process.
+
+
+-- not necesary if integrated extract and integrated replicat are used
+cd /u01/app/oracle/product/gg23/lib/sql/legacy
+sqlplus / as sysdba
+
+@role_setup
+Enter GoldenGate schema name:GGS_OWNER
+
+grant ggs_ggsuser_role to ggs_owner;
+
+@sequence 
+Please enter the name of a schema for the GoldenGate database objects:
+GGS_OWNER
+Setting schema name to GGS_OWNER
+
+ALTER TABLE sys.seq$ ADD SUPPLEMENTAL LOG DATA (PRIMARY KEY) COLUMNS;
+
+
+
+---------------prepare the target database ---------------------------
+
+-- on target server (o19cs)
+
+-- configure the init.ora parameters for GoldenGate
+
+sqlplus / as sysdba  <<END
+startup;
+alter system set enable_goldengate_replication=true scope=both;
+alter system set streams_pool_size=1G scope=both;
+alter database force logging;
+alter database add supplemental log data (primary key,unique,foreign key,all) columns;
+alter system switch logfile;
+alter system set undo_management=auto;
+alter system set undo_retention = 86400; -- 86400 seconds = 24 hours
+create pfile from spfile;
+END
+
+
+-- create the gg_data tablespace and the ggs_owner user
+
+sqlplus / as sysdba << END
+create tablespace GG_DATA datafile '/u02/oradata/ORCL/gg_data01.dbf' size 1m autoextend on next 1m;
+create user GGS_OWNER identified by GGS_OWNER default tablespace GG_DATA temporary tablespace temp;
+grant connect,resource,dba  to GGS_OWNER;
+grant create session        to GGS_OWNER;
+grant flashback any table   to GGS_OWNER;
+exec dbms_goldengate_auth.grant_admin_privilege('GGS_OWNER');
+exec dbms_streams_auth.grant_admin_privilege('GGS_OWNER');
+END
+
+
+-- not necesary if integrated extract and integrated replicat are used
+cd /u01/app/oracle/product/gg23/lib/sql/legacy
+sqlplus / as sysdba
+
+@role_setup
+Enter GoldenGate schema name:GGS_OWNER
+
+grant ggs_ggsuser_role to ggs_owner;
+
+@sequence 
+Please enter the name of a schema for the GoldenGate database objects:
+GGS_OWNER
+Setting schema name to GGS_OWNER
+
+ALTER TABLE sys.seq$ ADD SUPPLEMENTAL LOG DATA (PRIMARY KEY) COLUMNS;
+
+
+---------- prepare the goldengate server ---------------------
+
+-- on the goldengate server (gg21)
+
+adminclient
+
+connect http://gg21:5001 as ggma
+start deployment udepl1
+connect http://gg21:5001 as ggma
+
+info credentialstore domain OracleGoldenGate
+info credentialstore domain Network
+
+-- delete the old alias
+alter credentialstore delete user alias_db_source domain OracleGoldenGate
+alter credentialstore delete user alias_db_target domain OracleGoldenGate
+alter credentialstore delete user alias_distpath domain Network
+
+-- add the alias to the source database
+alter credentialstore add user ggs_owner@o12c:1521/ORCL password ggs_owner alias alias_db_source domain OracleGoldenGate
+
+-- add the alias to the target database
+alter credentialstore add user ggs_owner@o19cs:1521/ORCL password ggs_owner alias alias_db_target domain OracleGoldenGate
+
+-- add alias for the Network domain to be used by the distpath
+alter credentialstore add user ggma_distpath alias alias_distpath domain Network password slayer
+
+-- add the distribution path
+add distpath ltrt source trail://gg21:5003/services/v2/sources?trail=lt target ws://gg21:5004/services/v2/targets?trail=rt authentication useridalias alias_distpath domain Network
+
+
+-- create the checkpoint table and heartbeattable in the source database
+-- normally is not necessary, but in the case we want to reverse the extract and replicat to keep in sync the old source db with the new target
+
+dblogin useridalias alias_db_source domain OracleGoldenGate
+add checkpointtable ggs_owner.chkptab
+add heartbeattable
+
+info checkpointtable ggs_owner.*
+info heartbeattable
+
+
+-- create the checkpoint table and heartbeattable in the target database -- this is mandatory
+
+dblogin useridalias alias_db_target domain OracleGoldenGate
+add checkpointtable ggs_owner.chkptab
+add heartbeattable
+
+info checkpointtable ggs_owner.*
+info heartbeattable
+
+
+-- set the goldengate globals
+
+edit globals
+-----------------------------
+ggschema ggs_owner
+checkpointtable ggs_owner.chkptab
+-----------------------------
+
+view globals
+
+info credentialstore
+
+OGG (http://gg21:5001 udepl1 as alias_db_target@ORCL) 12> INFO CREDENTIALSTORE
+
+Default domain: OracleGoldenGate
+
+  Alias: alias_db_source
+  Userid: ggs_owner@o12c:1521/ORCL
+
+  Alias: alias_db_target
+  Userid: ggs_owner@o19cs:1521/ORCL
+
+------------------ prepare the source database for instantiation ---------------------------------------
+
+-- add schematrandata to prepare the tables (will add columns to data dictionary to keep the instantiation scn)
+
+dblogin useridalias alias_db_source domain OracleGoldenGate
+add schematrandata SOE allcols preparecsn nowait
+-- use add trandata for source database versions versions < Oracle 12.2
+-- add trandata SOE.* allcols preparecsn nowait
+
+info schematrandata SOE.*
+
+-- use add trandata for source database versions versions < Oracle 12.2
+add trandata SOE.* allcols preparecsn nowait
+
+info trandata SOE.*
+
+----------------------------- Create the extract process -------------------------------
+
+-- connect to the source database with gg
+
+dblogin useridalias alias_db_source domain OracleGoldenGate
+add extract ext1 integrated tranlog, begin now
+
+-- Create the parameter file for the extract process
+edit params ext1
+
+-----------------------------------------------------------------------------
+extract ext1
+useridalias alias_db_source domain OracleGoldenGate
+discardrollover at 01:00 on sunday
+warnlongtrans 5min checkinterval 30min
+statoptions reportfetch
+reportcount every 5 minutes, rate
+logallsupcols
+updaterecordformat compact
+tranlogoptions integratedparams (max_sga_size 100,parallelism 2)
+exttrail lt
+ddl include mapped
+ddloptions report
+gettruncates
+table SOE.*;
+sequence SOE.*;
+-----------------------------------------------------------------------------
+
+
+-- register the extract with the source database
+register extract ext1 database
+
+OGG (http://gg21:5001 udepl1 as alias_db_source@ORCL) 19> register extract ext1 database
+2025-09-07T19:50:45Z  INFO    OGG-02003  Extract group EXT1 successfully registered with database at SCN 1462893.
+
+
+-- add the exttrail for extract
+add exttrail lt, extract ext1
+
+-- start the extract process and check if it runs correctly
+start extract ext1
+info extract ext1 detail
+view report ext1
+
+
+-- at this point, we should have the extract running and capturing transactions
+
+-- we will perform the expdp/impdp to instantiatiate the target database at the scn prepared by add schematrandata/trandata
+
+-- on the source server (o12c)
+
+-------------------  perform the source database export -------------------------------------
+
+--  perform the source database export 
+
+-- get the path of DIRECTORY data_pump_dir
+cat <<END > /tmp/get_data_pump_dir.sql
+connect / as sysdba
+set lines 200 pages 0 echo off head off trim off trims off feed off
+select trim(directory_path) from dba_directories where directory_name='DATA_PUMP_DIR';
+exit
+END
+vdir_path=$(${ORACLE_HOME}/bin/sqlplus -L -S /nolog @/tmp/get_data_pump_dir.sql | tr -d '\r' | tr -d ' ' | tr -d '\n')
+rm -f /tmp/get_data_pump_dir.sql
+echo $vdir_path
+
+-- prepare the parameter file for expdp
+-- not necessary to include flashback_scn if integrated extract with DBOPTIONS ENABLE_INSTANTIATION_FILTERING in replicat
+cat <<END > $vdir_path/users_SOE_EXP.par
+directory       =   data_pump_dir
+dumpfile        =   users_SOE%U.dmp
+logfile         =   users_SOE_EXP.log
+schemas         =   SOE
+parallel        =   2
+filesize        =   2G
+exclude         =   statistics
+END
+
+-- export the schemas
+expdp system/manager parfile=$vdir_path/users_SOE_EXP.par
+
+-- Verify that the export is performed with flashback
+--
+-- Connected to: Oracle Database 12c Enterprise Edition Release 12.2.0.1.0 - 64bit Production
+-- FLASHBACK automatically enabled to preserve database integrity.
+-- Starting "SYSTEM"."SYS_EXPORT_SCHEMA_01":  system/******** parfile=/u01/app/oracle/admin/ORCL/dpdump//users_SOE_EXP.par
+
+
+-------------------- transfer the dump to target server ---------------------------------
+
+-- transfer the dump to target server o19cs 
+scp /u01/app/oracle/admin/ORCL/dpdump/users_SOE01.dmp o19cs:/u01/app/oracle/admin/ORCL/dpdump/users_SOE01.dmp
+scp /u01/app/oracle/admin/ORCL/dpdump/users_SOE02.dmp o19cs:/u01/app/oracle/admin/ORCL/dpdump/users_SOE02.dmp
+
+
+----------- prepare the target database for import --------------------------------------
+
+-- on the target server (o19cs)
+
+-- creating the necessary tablespaces
+sqlplus / as sysdba << END
+create tablespace SOE datafile '/u02/oradata/ORCL/soe_data01.dbf' size 1m autoextend on next 1m;
+END
+
+
+------------------------ perform the import into the target database -----------------------------------------
+
+-- on the target server (o19cs)
+
+-- get the path of DIRECTORY data_pump_dir
+cat <<END > /tmp/get_data_pump_dir.sql
+connect / as sysdba
+set lines 200 pages 0 echo off head off trim off trims off feed off
+select trim(directory_path) from dba_directories where directory_name='DATA_PUMP_DIR';
+exit
+END
+vdir_path=$(${ORACLE_HOME}/bin/sqlplus -L -S /nolog @/tmp/get_data_pump_dir.sql | tr -d '\r' | tr -d ' ' | tr -d '\n')
+rm -f /tmp/get_data_pump_dir.sql
+echo $vdir_path
+
+
+-- prepare the parameter file for impdp
+cat <<END > $vdir_path/users_SOE_IMP.par
+directory       = data_pump_dir
+dumpfile        = users_SOE%U.dmp
+logfile         = users_SOE_IMP.log
+schemas         = SOE
+parallel        = 2
+transform       = storage:n
+transform       = segment_attributes:n
+END
+
+-- import the schemas
+impdp system/manager parfile=$vdir_path/users_SOE_IMP.par
+
+-- if ORA-39082: Object type PACKAGE BODY:"SOE"."ORDERENTRY" created with compilation warnings
+sqlplus / as sysdba <<END
+alter package soe.orderentry compile;
+alter package soe.orderentry compile body;
+END
+
+----------------------------- Create the replicat process -------------------------------
+
+
+-- on the goldengate server (gg21)
+
+adminclient
+connect http://gg21:5001 as ggma
+
+
+
+-- connect to the target and create a parallel integrated replicat process
+dblogin useridalias alias_db_target domain OracleGoldenGate
+add replicat rep1, parallel, integrated, exttrail rt checkpointtable ggs_owner.chkptab
+
+
+
+-- create the parameter file for the replicat process
+edit params rep1
+
+-----------------------------------------------------------------------------
+replicat rep1
+useridalias alias_db_target domain OracleGoldenGate
+reportcount every 1 minute, rate
+reportrollover at 01:00 on sunday
+discardrollover at 01:00 on sunday
+dboptions enable_instantiation_filtering
+ddl include mapped
+ddlerror default abend
+reperror (default,abend)
+ddloptions report
+allownoopupdates
+applynoopupdates
+map_parallelism 3
+min_apply_parallelism 2
+max_apply_parallelism 4
+split_trans_recs 10000
+handlecollisions
+gettruncates
+map SOE.*, target SOE.*;
+-----------------------------------------------------------------------------
+
+
+
+-- start the replicat process
+start replicat rep1
+info replicat rep1 detail
+view report rep1
+
+
+-- at this point, we should have the extract and the replicat running. 
+
+----------------------------- start the distpath process -------------------------------
+
+-- We should start the distpath to transfer the extract trail into the replicat trail for being applied to the target by the replicat process
+
+-- start the distpath
+start distpath ltrt
+info distpath ltrt detail
+
+
+-- at this point, the transactions performed on the source db after the export will be replayed on the target db, and the replication works to catch up the two databases
+
+----------------------------- checks and verifications ------------------------------------
+
+-- on the goldengate server (gg21)
+
+-- we check the lag for the extract and the replicat
+lag extract ext1
+lag replicat rep1
+
+-- statistics for extract and replicat
+stats extract ext1, total, reportrate min
+stats replicat rep1, total, reportrate min, reset, noreportdetail
+
+-- we should check the count of some tables to see if it is at a minimum of difference
+-- once the lag is small and the counts are close, we should prepare for the application switch
+-- disconnect the application on the source and waits for the replication to catch up
+
+-- some checks if the replication works (at DML and DDL levels)
+
+-- on the source database
+
+-- create a table, it should be replicated on the target
+-- create a transaction, insert a row
+sqlplus / as sysdba<<END
+create table SOE.toto(id number);
+insert into SOE.toto values(100);
+commit;
+END
+
+
+-- on the target database
+
+-- the table is replicated (DDL replication works)
+-- the row is replicated (DML replication works)
+sqlplus / as sysdba<<END
+desc SOE.toto
+select * from SOE.toto;
+END
+
+-- on the source database
+
+-- drop the table, the drop should be replicated
+sqlplus / as sysdba<<END
+drop table SOE.toto;
+END
+
+-- on the target database
+
+-- the drop was replicated
+sqlplus / as sysdba<<END
+desc d3.toto
+END
+
+-- at this point, the replication of delta transactions is complete and we can connect the application on the target database
+
+-- eventually the replication can be inverted to have the target database replicate into the source, to keep in sync 
+-- the old source database with the transactions performed on the target db
+
+
+----------------------- stopping and deleting : cleanup the change synchronization processes --------------------------------------
+
+-- on goldengate server (gg21)
+
+-- connect to the source database
+dblogin useridalias alias_db_source domain OracleGoldenGate
+
+-- stop, delete and purge the extract
+stop extract ext1
+delete extract ext1
+purge exttrail lt
+
+-- delete the schematrandata
+delete schematrandata SOE allcols
+
+-- delete the trandata
+delete trandata SOE.* allcols
+
+-- connect to the target database
+dblogin useridalias alias_db_target domain OracleGoldenGate
+
+-- stop, delete and purge the replicat
+stop replicat rep1
+delete replicat rep1
+purge exttrail rt
+
+-- stop and delete the distpath
+stop distpath ltrt
+delete distpath ltrt
+
+-- delete the goldengate aliases 
+alter credentialstore delete user alias_distpath domain Network
+alter credentialstore delete user alias_db_source domain OracleGoldenGate
+alter credentialstore delete user alias_db_target domain OracleGoldenGate
+
+-- on the source server (o12c)
+
+-- drop the user GGS_OWNER and the tablespace GG_DATA
+sqlplus / as sysdba <<END
+alter database no force logging;
+alter database drop supplemental log data (primary key,unique,foreign key,all) columns;
+drop user GGS_OWNER cascade;
+drop tablespace GG_DATA including contents and datafiles;
+END
+
+-- on the target server (o19cs)
+
+-- drop the user GGS_OWNER and the tablespace GG_DATA
+sqlplus / as sysdba <<END
+alter database no force logging;
+alter database drop supplemental log data (primary key,unique,foreign key,all) columns;
+drop user GGS_OWNER cascade;
+drop tablespace GG_DATA including contents and datafiles;
+END

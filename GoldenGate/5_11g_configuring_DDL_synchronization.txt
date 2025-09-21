@@ -1,0 +1,142 @@
+https://gavinsoorma.com.au/knowledge-base/oracle-goldengate-tutorial-7-configuring-ddl-synchronization/
+
+-- on GoldenGate 11g
+
+-- on source server (o11g)
+sqlplus / as sysdba << END
+drop user scott cascade;
+create user scott identified by tiger default tablespace users;
+grant connect,resource,unlimited tablespace to scott;
+CREATE TABLE scott.dummy(
+        dummy NUMBER
+);
+INSERT INTO scott.dummy VALUES(0);
+COMMIT;
+END
+
+-- on target server (o11g2)
+sqlplus / as sysdba << END
+drop user scott cascade;
+create user scott identified by tiger default tablespace users;
+grant connect,resource,unlimited tablespace to scott;
+CREATE TABLE scott.dummy(
+        dummy NUMBER
+);
+INSERT INTO scott.dummy VALUES(0);
+COMMIT;
+END
+
+
+-- on source server (o11g)
+
+cd $OGG_HOME
+ggsci
+
+-- Create the Extract process
+ADD EXTRACT ext1, TRANLOG, BEGIN NOW
+
+-- Create a remote trail
+ADD RMTTRAIL /u01/app/oracle/product/gg/dirdat/rt, EXTRACT ext1
+
+-- Enable additional logging at the table level
+DBLOGIN USERID ggs_owner, PASSWORD ggs_owner
+ADD TRANDATA scott.*
+
+
+-- Create the parameter file for the extract group with DDL INCLUDE ALL
+EDIT PARAMS ext1
+
+EXTRACT ext1
+USERID ggs_owner, PASSWORD ggs_owner
+RMTHOST o12g2, MGRPORT 7809
+RMTTRAIL /u01/app/oracle/product/gg/dirdat/rt
+DYNAMICRESOLUTION
+DDL INCLUDE ALL
+DDLOPTIONS ADDTRANDATA,REPORT,GETAPPLOPS
+TABLE scott.*;
+SEQUENCE scott.*;
+
+
+-- on target server (o11g2)
+
+cd $OGG_HOME
+ggsci
+
+-- Create the Replicat group
+ADD REPLICAT rep1, EXTTRAIL /u01/app/oracle/product/gg/dirdat/rt
+
+-- Create the parameter file for the Replicat group
+EDIT PARAMS rep1
+
+REPLICAT rep1
+ASSUMETARGETDEFS
+USERID ggs_owner, PASSWORD ggs_owner
+DDL INCLUDE all
+DDLERROR default discard
+REPERROR (default,discard)
+DDLOPTIONS REPORT
+MAP scott.*, TARGET scott.*;
+
+
+-- on source server (o11g)
+
+cd $OGG_HOME
+ggsci
+
+-- On the source system, now start the Extract and Data Pump processes.
+START EXTRACT ext1
+
+info extract ext1
+view report ext1
+
+
+-- on target server (o11g2)
+
+cd $OGG_HOME
+ggsci
+
+-- Start the Replicat process
+START REPLICAT rep1
+STATUS REPLICAT rep1
+view report rep1
+
+
+-- Test
+-- on source server (o11g)
+
+ALTER TABLE scott.dummy ADD NEW_COL VARCHAR2(10);
+create table scott.dummy2 as SELECT * FROM scott.dummy;
+
+
+-- on target server (o11g2)
+
+o11g2:DB11G:DB11G:SYS
+SQL> desc scott.dummy
+ Name					   Null?    Type
+ ----------------------------------------- -------- ----------------------------
+ DUMMY						    NUMBER
+ NEW_COL					    VARCHAR2(10)
+
+o11g2:DB11G:DB11G:SYS
+SQL> SELECT * FROM scott.dummy2;
+
+     DUMMY NEW_COL
+---------- ----------
+	 0
+
+
+-- stopping and deleting
+
+-- on source server (o11g)
+DBLOGIN USERID ggs_owner, PASSWORD ggs_owner
+stop extract ext1
+delete extract ext1
+delete EXTTRAIL /u01/app/oracle/product/gg/dirdat/rt*
+delete RMTTRAIL /u01/app/oracle/product/gg/dirdat/rt*
+
+-- on target server (o11g2)
+DBLOGIN USERID ggs_owner, PASSWORD ggs_owner
+stop replicat rep1
+delete replicat rep1
+delete EXTTRAIL /u01/app/oracle/product/gg/dirdat/rt*
+delete RMTTRAIL /u01/app/oracle/product/gg/dirdat/rt*

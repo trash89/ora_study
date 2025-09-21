@@ -1,0 +1,124 @@
+Installing Oracle GoldenGate for Oracle Version 11.1.1.1.2 OGGCORE_11.1.1.1.2_PLATFORMS_111004.2100 
+
+mkdir -p /u01/app/oracle/product/gg
+cd /u01/app/oracle/product/gg
+tar xvf /home/oracle/temp/fbo_ggs_Linux_x64_ora10g_64bit.tar
+
+-- add to $HOME/.bash_profile
+export OGG_HOME=/u01/app/oracle/product/gg
+export PATH=$OGG_HOME:$PATH
+export LD_LIBRARY_PATH=$OGG_HOME:$LD_LIBRARY_PATH
+
+-- start the Oracle Database DB11G
+-- Add force logging, supplemental log data, create the GG tablespace ggs_data and the GG user ggs_owner
+sqlplus / as sysdba <<END
+alter database force logging;
+alter database add supplemental log data (primary key,unique,foreign key,all) columns;
+create tablespace ggs_data datafile '/u02/oradata/TSH1/ggs_data01.dbf' size 1m autoextend on next 1m;
+create user ggs_owner identified by ggs_owner default tablespace ggs_data temporary tablespace temp;
+GRANT CONNECT,RESOURCE                          TO ggs_owner;
+GRANT GGS_GGSUSER_ROLE                          TO ggs_owner;
+GRANT CREATE SESSION,ALTER SESSION,ALTER SYSTEM TO ggs_owner;
+GRANT SELECT ANY TABLE,SELECT ANY DICTIONARY    TO ggs_owner;
+GRANT SELECT ANY TRANSACTION                    TO ggs_owner;
+GRANT FLASHBACK ANY TABLE,LOCK ANY TABLE        TO ggs_owner;
+GRANT SELECT ON dba_clusters                    TO ggs_owner;
+GRANT SELECT ON SYS.V_$DATABASE                 TO ggs_owner;
+GRANT SELECT ON SYS.logmnr_buildlog             TO ggs_owner;
+GRANT EXECUTE ON SYS.dbms_logmnr_d              TO ggs_owner;
+GRANT EXECUTE ON SYS.DBMS_FLASHBACK             TO ggs_owner;
+GRANT EXECUTE ON SYS.utl_file                   TO ggs_owner;
+@/u01/app/oracle/product/gg/prvtclkm.plb
+GRANT EXECUTE ON SYS.dbms_internal_clkm         TO ggs_owner;
+GRANT BECOME USER TO ggs_owner;
+execute dbms_streams_auth.grant_admin_privilege('GGS_OWNER');
+GRANT DBA                                       TO ggs_owner;
+END
+
+-- ggsci should be run ONLY FROM $OGG_HOME, otherwise error: Cannot load ICU resource bundle 'ggMessage', error code 2 - No such file or directory
+
+-- create the MGR parameters
+cat <<END >$OGG_HOME/dirprm/mgr.prm
+PORT 7809
+USERID ggs_owner, PASSWORD ggs_owner
+PURGEMARKERHISTORY MINKEEPDAYS 3, MAXKEEPDAYS 5
+PURGEOLDTASKS ER *, AFTER 3 DAYS
+PURGEOLDEXTRACTS /u01/app/oracle/product/gg/dirdat/ex, USECHECKPOINTS
+END
+
+cd $OGG_HOME
+ggsci <<END
+-- create the subdirs
+create subdirs
+-- view the MGR params
+view params mgr
+END
+
+
+-- Create the GLOBALS param
+cat <<END >$OGG_HOME/GLOBALS
+GGSCHEMA GGS_OWNER
+CHECKPOINTTABLE GGS_OWNER.CHKPTAB
+END
+
+cd $OGG_HOME
+ggsci << END
+-- view the GLOBALS param
+view PARAMS ./GLOBALS
+-- Create the checkpoint table
+DBLOGIN USERID ggs_owner, PASSWORD ggs_owner
+ADD CHECKPOINTTABLE GGS_OWNER.CHKPTAB
+END
+
+-- configure DDL Synchronization
+cd $OGG_HOME
+sqlplus / as sysdba
+@marker_setup
+Enter Oracle GoldenGate schema name:GGS_OWNER
+
+alter session set recyclebin=OFF;
+
+@ddl_setup
+Enter Oracle GoldenGate schema name:GGS_OWNER
+
+@role_setup
+Enter GoldenGate schema name:GGS_OWNER
+
+grant ggs_ggsuser_role to ggs_owner;
+
+@ddl_enable
+
+@ddl_pin GGS_OWNER
+
+@sequence 
+Please enter the name of a schema for the GoldenGate database objects:
+ggs_owner
+Setting schema name to GGS_OWNER
+
+exit
+
+Oracle EE version       Privileges
+Oracle EE 10.2
+1.Run package to grant Oracle Streams admin privilege.
+exec dbms_streams_auth.grant_admin_privilege('GGS_OWNER')
+
+2.Grant INSERT into logmnr_restart_ckpt$.
+grant insert on system.logmnr_restart_ckpt$ to GGS_OWNER;
+
+3.Grant UPDATE on streams$_capture_process.
+grant update on sys.streams$_capture_process to GGS_OWNER;
+
+4.Grant the 'become user' privilege.
+grant become user to GGS_OWNER;
+
+Oracle EE 11.1 and 11.2.0.1
+1.Run package to grant Oracle Streams admin privilege.
+exec dbms_streams_auth.grant_admin_privilege('GGS_OWNER')
+
+2.Grant the 'become user' privilege.
+grant become user to GGS_OWNER;
+
+Oracle EE 11.2.0.3 and later
+Run package to grant Oracle Streams admin privilege.
+exec dbms_goldengate_auth.grant_admin_privilege('GGS_OWNER')
+

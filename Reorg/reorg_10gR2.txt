@@ -1,0 +1,250 @@
+-- oracle 10gR2
+
+-- user SCOTT
+
+alter table SCOTT.DEPT  move partition P_10     tablespace scott_data update indexes parallel 2;
+alter table SCOTT.DEPT  move partition P_20     tablespace scott_data update indexes parallel 2;
+alter table SCOTT.DEPT  move partition P_30     tablespace scott_data update indexes parallel 2;
+alter table SCOTT.DEPT  move partition P_40     tablespace scott_data update indexes parallel 2;
+alter table SCOTT.DEPT  move partition P_OTHERS tablespace scott_data update indexes parallel 2;
+alter table SCOTT.EMP   move partition P_10     tablespace scott_data update indexes parallel 2;
+alter table SCOTT.EMP   move partition P_20     tablespace scott_data update indexes parallel 2;
+alter table SCOTT.EMP   move partition P_30     tablespace scott_data update indexes parallel 2;
+alter table SCOTT.EMP   move partition P_40     tablespace scott_data update indexes parallel 2;
+alter table SCOTT.EMP   move partition P_OTHERS tablespace scott_data update indexes parallel 2;
+
+
+-- If the table or index is partitioned !!!!!!!
+alter table scott.dept      modify default attributes tablespace scott_data;
+alter table scott.emp       modify default attributes tablespace scott_data;
+alter index SCOTT.EMP_IDX   modify default attributes tablespace scott_indx;
+
+alter index SCOTT.PK_DEPT   rebuild online tablespace scott_indx logging parallel 2;
+alter index SCOTT.PK_EMP    rebuild online tablespace scott_indx logging parallel 2;
+
+alter table scott.test_lob move lob (AWLOB) store as ( tablespace scott_lob) parallel 2;
+
+alter index SCOTT.EMP_IDX rebuild partition P_10        tablespace scott_indx parallel 2 online;
+alter index SCOTT.EMP_IDX rebuild partition P_20        tablespace scott_indx parallel 2 online;
+alter index SCOTT.EMP_IDX rebuild partition P_30        tablespace scott_indx parallel 2 online;
+alter index SCOTT.EMP_IDX rebuild partition P_40        tablespace scott_indx parallel 2 online;
+alter index SCOTT.EMP_IDX rebuild partition P_OTHERS    tablespace scott_indx parallel 2 online;
+
+-- begin with table moving, then indexes becomes unusables, then rebuild indexes while moving
+alter table SOE.ORDERENTRY_METADATA     move tablespace soe_data logging parallel 2;
+alter index SOE.PROD_NAME_IX            rebuild online tablespace soe_indx logging parallel 2;
+
+
+-- for long columns, expdp/impdp
+
+-- lobs
+SELECT 'alter table '||owner||'.'||table_name||' move lob('||column_name||') STORE AS '||SEGMENT_NAME||' ;' FROM dba_lobs WHERE owner ='&table_owner' and segment_name ='&table_name';
+
+
+
+set lines 200
+col object_path for a60
+SELECT object_path FROM schema_export_objects           WHERE object_path NOT LIKE '%/%' ORDER BY 1;
+SELECT object_path FROM database_export_objects         WHERE object_path NOT LIKE '%/%' ORDER BY 1;
+SELECT object_path FROM table_export_objects            WHERE object_path NOT LIKE '%/%' ORDER BY 1;
+SELECT object_path FROM tablespace_export_objects       WHERE object_path NOT LIKE '%/%' ORDER BY 1;
+SELECT object_path FROM transportable_export_objects    WHERE object_path NOT LIKE '%/%' ORDER BY 1;
+SELECT object_path FROM dba_export_objects              WHERE object_path NOT LIKE '%/%' ORDER BY 1;
+
+
+-- datafiles move by taking it offline
+
+-- exporting object definitions, using include option
+-- To see a list of valid object type path names for use with the INCLUDE parameter, you can query the following views: DATABASE_EXPORT_OBJECTS, SCHEMA_EXPORT_OBJECTS, and TABLE_EXPORT_OBJECTS.
+expdp system/manager directory=data_pump_dir dumpfile=tbs.dmp full=y include=tablespace
+--showing object definition
+impdp system/manager directory=data_pump_dir dumpfile=tbs.dmp sqlfile=tbs.sql
+
+-- extracting the CREATE USER and GRANTs
+expdp system/manager directory=data_pump_dir dumpfile=user.dmp full=y include=user include=grant
+impdp system/manager directory=data_pump_dir dumpfile=user.dmp sqlfile=user.sql
+
+-- extract definitions FROM a user dump, eliminating STORAGE and SEGMENT ATTRIBUTES, the sqlfile name should be different !!!!
+expdp system/manager directory=data_pump_dir dumpfile=scott%U.dmp schemas=scott exclude=statistics filesize=100M parallel=2 status=5
+impdp system/manager directory=data_pump_dir dumpfile=scott%U.dmp sqlfile=scott_def.sql transform=storage:n transform=segment_attributes:n status=5
+
+
+-- get the path of DIRECTORY data_pump_dir
+cat <<END > /tmp/get_data_pump_dir.sql
+connect / as sysdba
+set lines 200 pages 0 echo off head off trim off trims off feed off
+rem alter session set container=pdb1;
+SELECT trim(directory_path) FROM dba_directories WHERE directory_name='DATA_PUMP_DIR';
+exit
+END
+vdir_path=$(${ORACLE_HOME}/bin/sqlplus -L -S /nolog @/tmp/get_data_pump_dir.sql | tr -d '\r' | tr -d ' ' | tr -d '\n')
+rm -f /tmp/get_data_pump_dir.sql
+echo $vdir_path
+
+
+-- export user SCOTT
+cat <<END > $vdir_path/scott_EXP.par
+directory       = data_pump_dir
+dumpfile        = scott%U.dmp
+logfile         = scott_EXP.log
+schemas         = scott
+exclude         = statistics
+filesize        = 1G
+parallel        = 2
+FLASHBACK_TIME  = "TO_TIMESTAMP(TO_CHAR(systimestamp,'DD-MM-YYYY HH24:MI:SS.FF'), 'DD-MM-YYYY HH24:MI:SS.FF')"
+END
+expdp system/manager parfile=$vdir_path/scott_EXP.par
+
+-- import user SCOTT
+cat <<END > $vdir_path/scott_IMP.par
+directory       = my_data_pump_dir
+dumpfile        = scott%U.dmp
+logfile         = scott_IMP.log
+transform       = storage:n
+transform       = segment_attributes:n
+END
+impdp system/manager parfile=$vdir_path/scott_IMP.par
+
+-- show definitions user SCOTT
+cat <<END > $vdir_path/scott_show_content_IMP.par
+directory       = data_pump_dir
+dumpfile        = scott%U.dmp
+logfile         = scott_show_content_IMP.log
+sqlfile         = scott_show_content.sql
+transform       = storage:n
+transform       = segment_attributes:n
+END
+impdp system/manager parfile=$vdir_path/scott_show_content_IMP.par
+
+
+-- transportable tablespaces
+-- The source and target database must use the same character set and national character set. 
+
+EXECUTE DBMS_TTS.TRANSPORT_SET_CHECK('SCOTT_DATA,SCOTT_INDX,SCOTT_LOB',true);
+SELECT * FROM TRANSPORT_SET_VIOLATIONS;
+
+alter table scott.dept  modify default attributes tablespace scott_data;
+alter table scott.emp   modify default attributes tablespace scott_data;
+
+alter tablespace scott_data read only;
+alter tablespace scott_indx read only;
+alter tablespace scott_lob  read only;
+
+cat <<END > /tmp/scott_tts_EXP.par
+directory               = data_pump_dir
+dumpfile                = scott_tts.dmp
+logfile                 = scott_tts_EXP.log 
+TRANSPORT_TABLESPACES   = SCOTT_DATA,SCOTT_INDX,SCOTT_LOB
+TRANSPORT_FULL_CHECK    = y
+END
+expdp system/manager parfile=/tmp/scott_tts_EXP.par
+
+alter tablespace scott_data read write;
+alter tablespace scott_indx read write;
+alter tablespace scott_lob read write;
+
+-- in 10gR2 it does not show the Datafiles required for transportable tablespaces
+SELECT file_name FROM dba_data_files WHERE tablespace_name in ('SCOTT_DATA','SCOTT_INDX','SCOTT_LOB');
+
+
+cat <<END > /tmp/scott_tts_IMP.par
+directory           = my_data_pump_dir
+dumpfile            = scott_tts.dmp
+logfile             = scott_tts_IMP.log
+TRANSPORT_DATAFILES = '/u02/oradata/CDB1/pdb1/scott_data01.dbf'
+TRANSPORT_DATAFILES = '/u02/oradata/CDB1/pdb1/scott_indx01.dbf'
+TRANSPORT_DATAFILES = '/u02/oradata/CDB1/pdb1/scott_lob01.dbf'
+END
+impdp system/manager parfile=/tmp/scott_tts_IMP.par
+
+-- Exports users MOVIE,SH,SOE,TPCDSLIKE,TPCH
+
+--- user MOVIE,SH,SOE,TPCDSLIKE,TPCH
+
+-- get the path of DIRECTORY data_pump_dir
+cat <<END > /tmp/get_data_pump_dir.sql
+connect / as sysdba
+set lines 200 pages 0 echo off head off trim off trims off feed off
+rem alter session set container=pdb1;
+SELECT trim(directory_path) FROM dba_directories WHERE directory_name='DATA_PUMP_DIR';
+exit
+END
+vdir_path=$(${ORACLE_HOME}/bin/sqlplus -L -S /nolog @/tmp/get_data_pump_dir.sql | tr -d '\r' | tr -d ' ' | tr -d '\n')
+rm -f /tmp/get_data_pump_dir.sql
+echo $vdir_path
+echo $ORACLE_SID
+
+-- export the bench users
+cat <<END > $vdir_path/users_bench_EXP.par
+directory       =   data_pump_dir
+dumpfile        =   users_bench%U.dmp
+logfile         =   users_bench_EXP.log
+schemas         =   MOVIE,SH,SOE,TPCDSLIKE,TPCH
+parallel        =   2
+filesize        =   2G
+exclude         =   statistics
+FLASHBACK_TIME  =   "TO_TIMESTAMP(TO_CHAR(systimestamp,'DD-MM-YYYY HH24:MI:SS.FF'), 'DD-MM-YYYY HH24:MI:SS.FF')"
+END
+expdp system/manager parfile=$vdir_path/users_bench_EXP.par
+
+-- export the metadata for bench users
+cat <<END > $vdir_path/users_bench_meta_EXP.par
+directory       =   data_pump_dir
+dumpfile        =   users_bench_meta.dmp
+logfile         =   users_bench_meta_EXP.log
+content         =   metadata_only
+schemas         =   MOVIE,SH,SOE,TPCDSLIKE,TPCH
+exclude         =   statistics
+FLASHBACK_TIME  =   "TO_TIMESTAMP(TO_CHAR(systimestamp,'DD-MM-YYYY HH24:MI:SS.FF'), 'DD-MM-YYYY HH24:MI:SS.FF')"
+END
+expdp system/manager parfile=$vdir_path/users_bench_meta_EXP.par
+
+-- extract the sql definitions FROM the metadata export
+cat <<END > $vdir_path/users_bench_meta_IMP.par
+directory   = data_pump_dir
+dumpfile    = users_bench_meta.dmp
+logfile     = users_bench_meta_IMP.log
+SQLFILE     = users_bench_meta.sql
+#schemas    = scott
+transform   = storage:n
+transform   = segment_attributes:n
+END
+impdp system/manager parfile=$vdir_path/users_bench_meta_IMP.par
+
+-- import the users
+cat <<END > $vdir_path/users_bench_IMP.par
+directory       = data_pump_dir
+dumpfile        = users_bench%U.dmp
+logfile         = users_bench_IMP.log
+transform       = storage:n
+transform       = segment_attributes:n
+#schemas        = MOVIE
+parallel        = 2
+END
+impdp system/manager parfile=$vdir_path/users_bench_IMP.par
+
+Datafiles
+Status	   Enabled BigF Flb Bck    Incr TABLESPACE_NAME 		        Megs  Id FILE_NAME
+------------------------------- ------- ------------------------- ---------- --- ------------------------------------------------------------------------------------------
+ ONLINE READ WRITE   NO YES YES    1280 MOVIE_DATA		              810.00   5 /u02/oradata/TSH1/movie_data01.dbf
+ ONLINE READ WRITE   NO YES YES    1280 MOVIE_INDX		              300.00  15 /u02/oradata/TSH1/movie_indx01.dbf
+ ONLINE READ WRITE   NO YES YES     128 SCOTT_DATA		               23.00  10 /u02/oradata/TSH1/scott_data01.dbf
+ ONLINE READ WRITE   NO YES YES     128 SCOTT_INDX			            2.00  11 /u02/oradata/TSH1/scott_indx01.dbf
+ ONLINE READ WRITE   NO YES YES     128 SCOTT_LOB		              298.00  17 /u02/oradata/TSH1/scott_lob01.dbf
+ ONLINE READ WRITE   NO YES YES     128 SH_DATA 		             1200.00   6 /u02/oradata/TSH1/sh_data01.dbf
+ ONLINE READ WRITE   NO YES YES     128 SH_INDX 		              254.00  14 /u02/oradata/TSH1/sh_indx01.dbf
+ ONLINE READ WRITE   NO YES YES    1280 SOE_DATA		             1400.00  13 /u02/oradata/TSH1/soe_data01.dbf
+ ONLINE READ WRITE   NO YES YES    1280 SOE_INDX		              970.00  12 /u02/oradata/TSH1/soe_indx01
+ ONLINE READ WRITE   NO YES YES    1280 TPCDS_DATA		             1400.00   8 /u02/oradata/TSH1/tpcds_data01.dbf
+ ONLINE READ WRITE   NO YES YES    1280 TPCDS_INDX		              350.00   9 /u02/oradata/TSH1/tpcds_indx01.dbf
+ ONLINE READ WRITE   NO YES YES    1280 TPCH_DATA		             1084.00   7 /u02/oradata/TSH1/tpch_data01.dbf
+ ONLINE READ WRITE   NO YES YES    1280 TPCH_INDX		               50.00  16 /u02/oradata/TSH1/tpch_indx01.dbf
+ ONLINE READ WRITE   NO YES YES     160 USERS				            1.00   4 /u02/oradata/TSH1/users01.dbf
+
+Users
+MOVIE                   OPEN		    MOVIE_DATA              TEMP			15/12/2024 19:35:46  N
+SCOTT                   OPEN		    SCOTT_DATA              TEMP			08/12/2024 09:28:31  N
+SH                      OPEN		    SH_DATA                 TEMP			15/12/2024 19:00:41  N
+SOE                     OPEN		    SOE_DATA                TEMP			15/12/2024 19:18:57  N
+TPCDSLIKE               OPEN		    TPCDS_DATA              TEMP			15/12/2024 20:06:29  N
+TPCH                    OPEN		    TPCH_DATA               TEMP			15/12/2024 19:44:38  N

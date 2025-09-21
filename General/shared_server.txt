@@ -1,0 +1,40 @@
+alter system set processes=900 scope=spfile;
+alter system reset sessions scope=spfile;
+
+alter system set local_listener = '(ADDRESS=(PROTOCOL=TCP)(HOST=lnxora-coclicop.ar.inpi)(PORT=16700))' scope=both; 
+alter system register;
+alter system set DISPATCHERS="(PROTOCOL=TCP)(DISPATCHERS=0)(SERVICE=COCLICOP)" scope=both;
+alter system set DISPATCHERS="(PROTOCOL=TCP)(DISPATCHERS=4)(SERVICE=COCLICOP)" scope=both;
+alter system set DISPATCHERS="(PROTOCOL=TCP)(SERVICE=COCLICOP)" scope=both;
+ALTER SYSTEM SET Shared_servers=900 SCOPE = BOTH ;
+ALTER SYSTEM SET shared_server_sessions=1400;
+ALTER SYSTEM SET max_shared_servers=20 scope=both;
+
+
+#tnsnames.ora
+COCLICOP =
+ (DESCRIPTION =
+   (ADDRESS = (PROTOCOL = TCP)(HOST = lnxora-coclicop.ar.inpi)(PORT = 16700))
+   (CONNECT_DATA =
+     (SERVER = SHARED)
+     (SERVICE_NAME = COCLICOP)
+   )
+ )
+
+#listener.ora
+LISTENER_COCLICOP =
+   (DESCRIPTION_LIST =
+    (DESCRIPTION =
+      (ADDRESS_LIST =
+        (ADDRESS = (PROTOCOL = TCP)(HOST = lnxora-coclicop.ar.inpi)(PORT=16700))
+        (CONNECT_DATA =
+        (SERVER = SHARED)
+        (SERVICE_NAME = COCLICOP)
+        )
+     )))
+
+SID_LIST_LISTENER_COCLICOP =
+  (SID_LIST =
+    (SID_DESC = (GLOBAL_DBNAME=COCLICOP)(SID_NAME = COCLICOP)
+      (ORACLE_HOME = /oracle/product/19c)))
+

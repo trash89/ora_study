@@ -1,0 +1,320 @@
+https://gavinsoorma.com.au/knowledge-base/platform-migration-and-database-upgrade-FROM-oracle-9i-to-oracle-11g-using-goldengate/
+
+-- on GoldenGate 11g
+
+-- on source server (o10g) and on target server (o11g)
+
+sqlplus / as sysdba << END
+drop user scott cascade;
+create or replace directory data_pump_dir as '/home/oracle/temp';
+END
+
+
+-- on source server (o10g)
+-- import bench users on Oracle 10g database
+
+-- on mylaptop: 
+marius@mylaptop:~/oracle_exports/10g $ cat /etc/exports
+--------------------------------------------------------------------------------
+/home/marius  192.168.1.0/24(rw,sync,no_subtree_check,no_root_squash)
+--------------------------------------------------------------------------------
+chmod -R g+rw,o+rw /home/marius/oracle_exports
+
+sudo mount -t nfs mylaptop:/home/marius/oracle_exports/10g /home/oracle/temp
+
+[oracle@o10g (TSH1) temp]$ ls -lrt /home/oracle/temp
+total 4715680
+-rw-rw-rw- 1 1000 1000 1013227520 Jan 15 09:26 users_bench02.dmp
+-rw-rw-rw- 1 1000 1000 2147483648 Jan 15 09:27 users_bench01.dmp
+-rw-rw-rw- 1 1000 1000       7408 Jan 15 09:27 users_bench_EXP.log
+-rw-rw-rw- 1 1000 1000        349 Jan 15 09:27 users_bench_EXP.par
+-rw-rw-rw- 1 1000 1000     987136 Jan 15 09:27 users_bench_meta.dmp
+-rw-rw-rw- 1 1000 1000     145289 Jan 15 09:27 users_bench_meta.sql
+-rw-rw-rw- 1 1000 1000       1742 Jan 15 09:27 users_bench_meta_EXP.log
+-rw-rw-rw- 1 1000 1000        233 Jan 15 09:27 users_bench_meta_EXP.par
+-rw-rw-rw- 1 1000 1000       1508 Jan 15 09:27 users_bench_meta_IMP.log
+-rw-rw-rw- 1 1000 1000        216 Jan 15 09:27 users_bench_meta_IMP.par
+-rw-rw-rw- 1 1000 1000 1666969600 Jan 15 09:28 users_bench03.dmp
+
+
+-- get the path of DIRECTORY data_pump_dir
+cat <<END > /tmp/get_data_pump_dir.sql
+connect / as sysdba
+set lines 200 pages 0 echo off head off trim off trims off feed off
+rem alter session set container=pdb1;
+SELECT trim(directory_path) FROM dba_directories WHERE directory_name='DATA_PUMP_DIR';
+exit
+END
+vdir_path=$(${ORACLE_HOME}/bin/sqlplus -L -S /nolog @/tmp/get_data_pump_dir.sql | tr -d '\r' | tr -d ' ' | tr -d '\n')
+rm -f /tmp/get_data_pump_dir.sql
+echo $vdir_path
+
+-- creating tablespaces
+sqlplus / as sysdba << END
+create tablespace MOVIE_DATA    datafile '/u02/oradata/TSH1/movie_data01.dbf'   size 1m autoextend on next 1m;
+create tablespace MOVIE_INDX    datafile '/u02/oradata/TSH1/movie_indx01.dbf'   size 1m autoextend on next 1m;
+create tablespace SH_DATA       datafile '/u02/oradata/TSH1/sh_data01.dbf'      size 1m autoextend on next 1m;
+create tablespace SH_INDX       datafile '/u02/oradata/TSH1/sh_indx01.dbf'      size 1m autoextend on next 1m;
+create tablespace SOE_DATA      datafile '/u02/oradata/TSH1/soe_data01.dbf'     size 1m autoextend on next 1m;
+create tablespace SOE_INDX      datafile '/u02/oradata/TSH1/soe_indx01.dbf'     size 1m autoextend on next 1m;
+create tablespace TPCDS_DATA    datafile '/u02/oradata/TSH1/tpcds_data01.dbf'   size 1m autoextend on next 1m;
+create tablespace TPCDS_INDX    datafile '/u02/oradata/TSH1/tpcds_indx01.dbf'   size 1m autoextend on next 1m;
+create tablespace TPCH_DATA     datafile '/u02/oradata/TSH1/tpch_data01.dbf'    size 1m autoextend on next 1m;
+create tablespace TPCH_INDX     datafile '/u02/oradata/TSH1/tpch_indx01.dbf'    size 1m autoextend on next 1m;
+END
+
+
+-- import the users
+cat <<END > $vdir_path/users_bench2_IMP.par
+directory       = data_pump_dir
+dumpfile        = users_bench%U.dmp
+logfile         = users_bench2_IMP.log
+#transform       = storage:n
+#transform       = segment_attributes:n
+parallel		= 2
+schemas			= MOVIE,SH,SOE,TPCDSLIKE,TPCH
+END
+impdp system/manager parfile=$vdir_path/users_bench2_IMP.par
+
+sqlplus / as sysdba << END
+grant execute on dbms_lock to SOE,TPCDSLIKE;
+@?/rdbms/admin/utlrp
+END
+
+-- the users are:
+MOVIE,SH,SOE,TPCDSLIKE,TPCH
+
+
+-- on target server (o11g)
+
+-- creating tablespaces
+sqlplus / as sysdba << END
+drop user MOVIE cascade;
+drop user SH cascade;
+drop user SOE cascade;
+drop user TPCDSLIKE cascade;
+drop user TPCH cascade;
+create tablespace MOVIE_DATA    datafile '/u02/oradata/DB11G/movie_data01.dbf'   size 1m autoextend on next 1m;
+create tablespace MOVIE_INDX    datafile '/u02/oradata/DB11G/movie_indx01.dbf'   size 1m autoextend on next 1m;
+create tablespace SH_DATA       datafile '/u02/oradata/DB11G/sh_data01.dbf'      size 1m autoextend on next 1m;
+create tablespace SH_INDX       datafile '/u02/oradata/DB11G/sh_indx01.dbf'      size 1m autoextend on next 1m;
+create tablespace SOE_DATA      datafile '/u02/oradata/DB11G/soe_data01.dbf'     size 1m autoextend on next 1m;
+create tablespace SOE_INDX      datafile '/u02/oradata/DB11G/soe_indx01.dbf'     size 1m autoextend on next 1m;
+create tablespace TPCDS_DATA    datafile '/u02/oradata/DB11G/tpcds_data01.dbf'   size 1m autoextend on next 1m;
+create tablespace TPCDS_INDX    datafile '/u02/oradata/DB11G/tpcds_indx01.dbf'   size 1m autoextend on next 1m;
+create tablespace TPCH_DATA     datafile '/u02/oradata/DB11G/tpch_data01.dbf'    size 1m autoextend on next 1m;
+create tablespace TPCH_INDX     datafile '/u02/oradata/DB11G/tpch_indx01.dbf'    size 1m autoextend on next 1m;
+END
+
+
+-- on source server (o10g)
+
+-- Create the DDL synchonization process
+
+-- Create the Extract process
+ADD EXTRACT ext1, TRANLOG, BEGIN NOW
+
+-- Create a remote trail
+ADD RMTTRAIL /u01/app/oracle/product/gg/dirdat/rt, EXTRACT ext1
+
+-- Enable additional logging at the table level
+DBLOGIN USERID ggs_owner, PASSWORD ggs_owner
+ADD TRANDATA MOVIE.*
+ADD TRANDATA SH.*
+ADD TRANDATA SOE.*
+ADD TRANDATA TPCDSLIKE.*
+ADD TRANDATA TPCH.*
+
+
+-- Create the parameter file for the extract group with DDL INCLUDE ALL
+EDIT PARAMS ext1
+
+EXTRACT ext1
+setenv (NLS_LANG="AMERICAN_AMERICA.WE8ISO8859P15")
+USERID ggs_owner, PASSWORD ggs_owner
+RMTHOST o11g, MGRPORT 7809
+RMTTRAIL /u01/app/oracle/product/gg/dirdat/rt
+DYNAMICRESOLUTION
+DDL INCLUDE ALL
+DDLOPTIONS ADDTRANDATA,REPORT,GETAPPLOPS
+TABLE MOVIE.*;
+SEQUENCE MOVIE.*;
+TABLE SH.*;
+SEQUENCE SH.*;
+TABLE SOE.*;
+SEQUENCE SOE.*;
+TABLE TPCDSLIKE.*;
+SEQUENCE TPCDSLIKE.*;
+TABLE TPCH.*;
+SEQUENCE TPCH.*;
+
+
+-- on target server (o11g)
+
+-- Create the initial data load task rep1-rep5
+
+cd $OGG_HOME
+ggsci
+
+-- Create the Replicat group
+ADD REPLICAT rep1, EXTTRAIL /u01/app/oracle/product/gg/dirdat/rt
+
+-- Create the parameter file for the Replicat group
+EDIT PARAMS rep1
+
+REPLICAT rep1
+setenv (NLS_LANG="AMERICAN_AMERICA.AL32UTF8")
+ASSUMETARGETDEFS
+USERID ggs_owner, PASSWORD ggs_owner
+DDL INCLUDE all
+DDLERROR default discard
+REPERROR (default,discard)
+DDLOPTIONS REPORT
+MAP MOVIE.*, TARGET MOVIE.*;
+MAP SH.*, TARGET SH.*;
+MAP SOE.*, TARGET SOE.*;
+MAP TPCDSLIKE.*, TARGET TPCDSLIKE.*;
+MAP TPCH.*, TARGET TPCH.*;
+
+
+-- on source server (o10g)
+
+-- Start the initial load data extract task on the source system
+cd $OGG_HOME
+ggsci
+
+start extract ext1
+info extract ext1
+view report ext1
+
+-- Obtain the current SCN on the source database
+o10g:TSH1:TSH1:SYS
+SQL> SELECT dbms_flashback.get_system_change_number as current_scn FROM dual;
+
+CURRENT_SCN
+-----------
+     552816
+
+--  perform the database export 
+-- get the path of DIRECTORY data_pump_dir
+cat <<END > /tmp/get_data_pump_dir.sql
+connect / as sysdba
+set lines 200 pages 0 echo off head off trim off trims off feed off
+rem alter session set container=pdb1;
+SELECT trim(directory_path) FROM dba_directories WHERE directory_name='DATA_PUMP_DIR';
+exit
+END
+vdir_path=$(${ORACLE_HOME}/bin/sqlplus -L -S /nolog @/tmp/get_data_pump_dir.sql | tr -d '\r' | tr -d ' ' | tr -d '\n')
+rm -f /tmp/get_data_pump_dir.sql
+echo $vdir_path
+
+-- export the bench users, note the 2 to the parameters
+cat <<END > $vdir_path/users_bench2_EXP.par
+directory       =   data_pump_dir
+dumpfile        =   users_bench2%U.dmp
+logfile         =   users_bench2_EXP.log
+schemas         =   MOVIE,SH,SOE,TPCDSLIKE,TPCH
+parallel        =   2
+filesize        =   2G
+exclude         =   statistics
+FLASHBACK_SCN   =   552816
+END
+expdp system/manager parfile=$vdir_path/users_bench2_EXP.par
+
+-- while exporting, make some changes on the source DB
+o10g:TSH1:TSH1:SYS
+SQL> create table soe.marius as SELECT * FROM dba_objects;
+
+Table created.
+
+
+
+-- on target server (o11g)
+
+sudo mount -t nfs mylaptop:/home/marius/oracle_exports/10g /home/oracle/temp
+[oracle@o11g (DB11G) temp]$ ls -lrt /home/oracle/temp
+total 9430516
+-rw-rw-rw-. 1 marius marius 1013227520 Jan 15 09:26 users_bench02.dmp
+-rw-rw-rw-. 1 marius marius 2147483648 Jan 15 09:27 users_bench01.dmp
+-rw-rw-rw-. 1 marius marius        349 Jan 15 09:27 users_bench_EXP.par
+-rw-rw-rw-. 1 marius marius     987136 Jan 15 09:27 users_bench_meta.dmp
+-rw-rw-rw-. 1 marius marius     145289 Jan 15 09:27 users_bench_meta.sql
+-rw-rw-rw-. 1 marius marius       1742 Jan 15 09:27 users_bench_meta_EXP.log
+-rw-rw-rw-. 1 marius marius        233 Jan 15 09:27 users_bench_meta_EXP.par
+-rw-rw-rw-. 1 marius marius       1508 Jan 15 09:27 users_bench_meta_IMP.log
+-rw-rw-rw-. 1 marius marius        216 Jan 15 09:27 users_bench_meta_IMP.par
+-rw-rw-rw-. 1 marius marius 1666969600 Jan 15 09:28 users_bench03.dmp
+-rw-r--r--. 1    501    501        215 Feb 25 16:22 users_bench_IMP.par
+-rw-r--r--. 1    501    501       5249 Feb 25 16:32 users_bench_IMP.log
+-rw-rw-rw-. 1 marius marius        501 Feb 25 20:16 users_bench_EXP.log
+-rw-r--r--. 1    501    501        265 Feb 25 20:17 users_bench2_EXP.par
+-rw-r-----. 1    501    501 2147483648 Feb 25 20:19 users_bench201.dmp
+-rw-r-----. 1    501    501 1003798528 Feb 25 20:20 users_bench203.dmp
+-rw-r-----. 1    501    501 1676677120 Feb 25 20:20 users_bench202.dmp
+-rw-r--r--. 1    501    501       7412 Feb 25 20:20 users_bench2_EXP.log
+
+-- As root on mylaptop
+root@mylaptop:/root# chmod g+rw,o+rw /home/marius/oracle_exports/10g/*.dmp
+
+-- perform the import
+-- get the path of DIRECTORY data_pump_dir
+cat <<END > /tmp/get_data_pump_dir.sql
+connect / as sysdba
+set lines 200 pages 0 echo off head off trim off trims off feed off
+rem alter session set container=pdb1;
+SELECT trim(directory_path) FROM dba_directories WHERE directory_name='DATA_PUMP_DIR';
+exit
+END
+vdir_path=$(${ORACLE_HOME}/bin/sqlplus -L -S /nolog @/tmp/get_data_pump_dir.sql | tr -d '\r' | tr -d ' ' | tr -d '\n')
+rm -f /tmp/get_data_pump_dir.sql
+echo $vdir_path
+
+-- import the users
+cat <<END > $vdir_path/users_bench2_IMP.par
+directory       = data_pump_dir
+dumpfile        = users_bench2%U.dmp
+logfile         = users_bench2_IMP.log
+#transform       = storage:n
+#transform       = segment_attributes:n
+schemas         = MOVIE,SH,SOE,TPCDSLIKE,TPCH
+parallel        = 2
+END
+impdp system/manager parfile=$vdir_path/users_bench2_IMP.par
+
+
+
+-- on target server (o11g)
+
+cd $OGG_HOME
+ggsci
+ 
+-- Start the Replicat process  -- Note the AFTERCSN clause
+START REPLICAT rep1 aftercsn 552816
+STATUS REPLICAT rep1
+view report rep1
+
+
+-- Test, the table is present
+o11g:DB11G:DB11G:SYS
+SQL> SELECT count(*) FROM SOE."MARIUS";
+
+  COUNT(*)
+----------
+     65700
+
+
+-- stopping and deleting
+
+-- on source server (o10g)
+DBLOGIN USERID ggs_owner, PASSWORD ggs_owner
+stop extract ext1
+delete extract ext1
+
+rm -f /home/oracle/temp/users_bench2*
+
+
+-- on target server (o11g)
+DBLOGIN USERID ggs_owner, PASSWORD ggs_owner
+stop replicat rep1
+delete replicat rep1
+

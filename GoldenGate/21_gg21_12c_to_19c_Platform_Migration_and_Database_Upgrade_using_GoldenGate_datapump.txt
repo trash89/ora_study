@@ -1,0 +1,612 @@
+-- source server: s06894w0(Oracle 12.1), gg server: s17650b0(GoldenGate 21), target server: s15421u0(Oracle 19c),
+--
+-- source database --> goldengate server --> target database
+--
+-- This is a change synchronization technique, with the target database instantiation using datapump(expdp/impdp) method
+-- this procedure is used for big databases with high transactional activity and low interruption of service
+-- use of parallel integrated extract and parallel integrated replicat for quick catch up of delta transactions (source database >11g and GG >12.2)
+--
+
+Oracle GoldenGate — Oracle RDBMS Server Recommended Patches (Doc ID 1557031.1)
+Latest GoldenGate/Database (OGG/RDBMS) Patch recommendations (Doc ID 2193391.1)
+
+
+---------- prepare the source database ---------------------------
+
+-- on the source server (s06894w0)
+
+echo ${ORACLE_HOME}
+echo ${ORACLE_SID}
+echo ${TNS_ADMIN}
+
+-- check the constraints not valudated, especially PK and UK and validate it 
+SELECT constraint_name,constraint_type,table_name,status,validated,invalid
+FROM dba_constraints
+WHERE
+   owner LIKE upper('%&&own%')
+   and (status != 'ENABLED' or validated !='VALIDATED')
+ORDER BY owner,table_name,constraint_name
+;
+
+-- validate the PK and UK constraints if they are not validated/enabled
+
+alter table <schema>.<table_name> enable validate constraint <constraint_name>;
+
+
+-- check the logging of tables and indexes and put them in logging mode
+SELECT 'alter table "'||owner||'"."'||table_name||'" logging;' 
+FROM dba_tables 
+WHERE owner LIKE upper('%&&own%') and logging='NO'
+union all
+SELECT 'alter index "'||owner||'"."'||index_name||'" logging;' 
+FROM dba_indexes
+WHERE owner LIKE upper('%&&own%') and logging='NO'
+;
+
+-- put the tables and the indexes in logging mode
+alter table <schema>.<table_name> logging;
+alter index <schema>.<index_name> logging;
+
+
+-- extract the metadata (roles,etc) that should be created on the target database, with an export full with CONTENT=METADATA_ONLY
+
+
+-- configure the init.ora parameters for GoldenGate
+
+sqlplus / as sysdba  <<END
+startup;
+alter system set enable_goldengate_replication=true scope=both;
+alter system set streams_pool_size=1G scope=both;
+alter database force logging;
+alter database add supplemental log data (primary key,unique,foreign key,all) columns;
+alter system switch logfile;
+alter system set undo_management=auto;
+alter system set undo_retention = 86400; -- 86400 seconds = 24 hours
+create pfile from spfile;
+END
+
+
+-- create the gg_data tablespace and the ggs_owner user
+
+sqlplus / as sysdba << END
+create tablespace GG_DATA datafile '/ora_data_tbl/d3s1d/gg_data01.dbf' size 1m autoextend on next 1m;
+create user GGS_OWNER identified by "SafranAircraft1!" default tablespace GG_DATA temporary tablespace DEFAUT_TEMP;
+grant connect,resource,dba  to GGS_OWNER;
+grant create session        to GGS_OWNER;
+grant flashback any table   to GGS_OWNER;
+exec dbms_goldengate_auth.grant_admin_privilege('GGS_OWNER');
+exec dbms_streams_auth.grant_admin_privilege('GGS_OWNER');
+END
+
+
+
+---------------prepare the target database ---------------------------
+
+-- on the target server (s15421u0)
+
+echo ${ORACLE_HOME}
+echo ${ORACLE_SID}
+echo ${TNS_ADMIN}
+
+-- configure the init.ora parameters for GoldenGate
+
+sqlplus / as sysdba  <<END
+startup;
+alter system set enable_goldengate_replication=true scope=both;
+alter system set streams_pool_size=1G scope=both;
+alter database force logging;
+alter database add supplemental log data (primary key,unique,foreign key,all) columns;
+alter system switch logfile;
+alter system set undo_management=auto;
+alter system set undo_retention = 86400; -- 86400 seconds = 24 hours
+create pfile from spfile;
+END
+
+
+-- create gg_data tablespace and ggs_owner user
+
+sqlplus / as sysdba << END
+create tablespace GG_DATA datafile '/ora_data_tbl/d3s1d/gg_data01.dbf' size 1m autoextend on next 1m;
+create user GGS_OWNER identified by "SafranAircraft1!" default tablespace GG_DATA temporary tablespace DEFAUT_TEMP;
+grant connect,resource,dba  to GGS_OWNER;
+grant create session        to GGS_OWNER;
+grant flashback any table   to GGS_OWNER;
+exec dbms_goldengate_auth.grant_admin_privilege('GGS_OWNER');
+exec dbms_streams_auth.grant_admin_privilege('GGS_OWNER');
+END
+
+
+---------- prepare the goldengate server ---------------------
+
+-- on the goldengate server (s17650b0)
+
+adminclient
+connect https://s17650b0:443 as oggadmin !
+
+info credentialstore domain OracleGoldenGate
+info credentialstore domain Network
+
+
+-- check the domains
+-- OGG (https://s17650b0 OGG21_SAE) 18> info credentialstore domain Network
+
+-- No information found in domain Network.
+
+-- Other domains:
+
+--  DEV
+--  DEVTRG
+
+-- To view other domains, use INFO CREDENTIALSTORE DOMAIN <domain>
+-- 2025-09-12T08:44:36Z  INFO    OGG-12029  The item type domain with name 'Network' does not exist.
+
+
+-- create an alias to the source database
+alter credentialstore delete user alias_db_source domain DEV
+alter credentialstore add user ggs_owner@(DESCRIPTION=(ADDRESS=(PROTOCOL=TCP)(HOST=s06894w0.snm.snecma)(PORT=1521))(CONNECT_DATA=(SERVER=DEDICATED)(SERVICE_NAME=D3S1D))) password "SafranAircraft1!" alias alias_db_source domain DEV
+
+
+-- create an alias to the target database
+alter credentialstore delete user alias_db_target domain DEV
+alter credentialstore add user ggs_owner@(DESCRIPTION=(ADDRESS=(PROTOCOL=TCP)(HOST=s15421u0.snm.snecma)(PORT=5225))(CONNECT_DATA=(SERVER=DEDICATED)(SERVICE_NAME=D3S1D))) password "SafranAircraft1!" alias alias_db_target domain DEV
+
+-- create an alias for the distribution path on the Network domain
+alter credentialstore delete user alias_distpath domain Network
+alter credentialstore add user ggma_distpath alias alias_distpath domain Network password "SafranAircraft1!"
+
+
+info credentialstore domain DEV
+
+-- OGG (https://s17650b0 OGG21_SAE as alias_db_target@D3S1D) 52> info credentialstore domain DEV
+
+-- Domain: DEV
+
+--  Alias: alias_db_source
+--  Userid: ggs_owner@(DESCRIPTION=(ADDRESS=(PROTOCOL=TCP)(HOST=s06894w0.snm.snecma)(PORT=1521))(CONNECT_DATA=(SERVER=DEDICATED)(SERVICE_NAME=D3S1D)))
+
+--  Alias: alias_db_target
+--  Userid: ggs_owner@(DESCRIPTION=(ADDRESS=(PROTOCOL=TCP)(HOST=s15421u0.snm.snecma)(PORT=5225))(CONNECT_DATA=(SERVER=DEDICATED)(SERVICE_NAME=D3S1D)))
+
+
+
+-- add the distribution path
+add distpath ltrt source trail://127.0.0.1:9002/services/OGG21_SAE/v2/sources?trail=lt target ogg://127.0.0.1:9003/services/OGG21_SAE/v2/targets?trail=rt authentication useridalias alias_distpath domain Network
+
+
+-- create the checkpoint table and heartbeattable in the source database
+-- normally is not necessary, but in the case we want to reverse the extract and replicat to keep in sync the old source db with the new target
+
+dblogin useridalias alias_db_source domain DEV
+add checkpointtable ggs_owner.chkptab
+add heartbeattable
+
+info checkpointtable ggs_owner.*
+info heartbeattable
+
+-- create the checkpoint table and heartbeattable in the target database -- this is mandatory
+
+dblogin useridalias alias_db_target domain DEV
+add checkpointtable ggs_owner.chkptab
+add heartbeattable
+
+info checkpointtable ggs_owner.*
+info heartbeattable
+
+
+-- set the goldengate globals
+
+edit globals
+-----------------------------
+ggschema ggs_owner
+checkpointtable ggs_owner.chkptab
+-----------------------------
+
+view globals
+
+
+------------------ prepare the source database for instantiation ---------------------------------------
+
+-- add schematrandata to prepare the tables (will add columns to data dictionary to keep the instantiation scn)
+
+-- connect to the source database with gg
+dblogin useridalias alias_db_source domain DEV
+
+add schematrandata D3 allcols preparecsn nowait
+add schematrandata PDD allcols preparecsn nowait
+
+info schematrandata D3.*
+info schematrandata PDD.*
+
+-- use add trandata for source database versions versions < Oracle 12.2
+add trandata D3.* allcols preparecsn nowait
+add trandata PDD.* allcols preparecsn nowait
+
+info trandata D3.*
+info trandata PDD.*
+
+----------------------------- Create the extract process -------------------------------
+
+-- connect to the source database with gg
+dblogin useridalias alias_db_source domain DEV
+
+-- add the extract process
+add extract ext1 integrated tranlog, begin now
+
+-- Create the parameter file for the extract process
+edit params ext1
+
+------------------------------------------------------------------
+extract ext1
+useridalias alias_db_source domain DEV
+discardrollover at 01:00 on sunday
+warnlongtrans 5min checkinterval 30min
+statoptions reportfetch
+reportcount every 5 minutes, rate
+logallsupcols
+updaterecordformat compact
+tranlogoptions integratedparams (max_sga_size 100,parallelism 2)
+exttrail lt
+ddl include mapped
+ddloptions report
+gettruncates
+table D3.*;
+sequence D3.*;
+table PDD.*;
+sequence PDD.*;
+------------------------------------------------------------------
+
+
+-- register the extract within the source database
+register extract ext1 database
+
+-- OGG (https://s17650b0 OGG21_SAE as alias_db_source@D3S1D) 61> register extract ext1 database
+-- 2025-09-12T09:39:26Z  INFO    OGG-02003  Extract group EXT1 successfully registered with database at SCN 112085456.
+
+
+-- add the exttrail for the extract
+add exttrail lt, extract ext1 megabytes 500
+
+-- start the extract process and check if it runs correctly
+start extract ext1
+info extract ext1 detail
+view report ext1
+
+
+-- at this point, we should have the extract running and capturing transactions
+
+-- we will perform the expdp/impdp to instantiate the target database at the scn prepared by add schematrandata/trandata
+
+
+-------------------  perform the source database export -------------------------------------
+
+-- on the source server (s06894w0)
+
+-- get the path of DIRECTORY data_pump_dir
+cat <<END > /tmp/get_data_pump_dir.sql
+connect / as sysdba
+set lines 200 pages 0 echo off head off trim off trims off feed off
+select trim(directory_path) from dba_directories where directory_name='DATA_PUMP_DIR';
+exit
+END
+vdir_path=$(${ORACLE_HOME}/bin/sqlplus -L -S /nolog @/tmp/get_data_pump_dir.sql | tr -d '\r' | tr -d ' ' | tr -d '\n')
+rm -f /tmp/get_data_pump_dir.sql
+echo $vdir_path
+
+-- prepare the parameter file for expdp
+-- it is not necessary to include flashback_scn as we use an integrated extract and DBOPTIONS ENABLE_INSTANTIATION_FILTERING in replicat
+cat <<END > $vdir_path/users_D3_EXP.par
+directory       =   data_pump_dir
+dumpfile        =   users_D3%U.dmp
+logfile         =   users_D3_EXP.log
+schemas         =   D3,PDD
+parallel        =   2
+filesize        =   2G
+exclude         =   statistics
+END
+
+-- create the temporary user 'my_exp_user' with EXP_FULL_DATABASE role to perform the export
+sqlplus / as sysdba <<END
+create user my_exp_user identified by "SafranAircraft1!" default tablespace system temporary tablespace DEFAUT_TEMP;
+alter user my_exp_user local temporary tablespace DEFAUT_TEMP;
+grant dba to my_exp_user;
+grant exp_full_database to my_exp_user;
+grant unlimited tablespace to my_exp_user;
+END
+
+-- export the schemas
+expdp my_exp_user/"SafranAircraft1!" parfile=$vdir_path/users_D3_EXP.par
+
+-- drop the temporary export user 'my_exp_user'
+sqlplus / as sysdba <<END
+drop user my_exp_user cascade;
+END
+
+-- Verify that the export is performed with the flashback
+--
+-- Connected to: Oracle Database 12c Enterprise Edition Release 12.1.0.2.0 - 64bit Production
+-- With the Partitioning, OLAP, Advanced Analytics and Real Application Testing options
+-- FLASHBACK automatically enabled to preserve database integrity.
+-- Starting "SYSTEM1"."SYS_EXPORT_SCHEMA_01":  system1/******** parfile=/ora_arch_log/d3s1d/users_D3_EXP.par
+
+
+-------------------- transfer the dumps to target server ---------------------------------
+
+-- on the source server (s06894w0)
+mkdir /AXIS/ADMINDB/marius
+mv /ora_arch_log/d3s1d/users_D3*.dmp /AXIS/ADMINDB/marius
+
+-- on the target server (s15421u0), recuperate the dumps in data_dump_dir for import
+mv /AXIS/ADMINDB/marius/users_D3*.dmp /ora_arch_log/d3s1d
+
+
+----------- prepare the target database for import --------------------------------------
+
+-- on the target server (s15421u0)
+
+-- creating the necessary tablespaces
+sqlplus / as sysdba << END
+create tablespace D3_D3_DATA01 datafile '/ora_data_tbl/d3s1d/d3_d3_data01_dbf01.dbf' size 10g autoextend on next 10g;
+create tablespace D3_D3_INDEX01 datafile '/ora_data_tbl/d3s1d/d3_d3_index01_dbf01.dbf' size 10g autoextend on next 10g;
+create tablespace D3_D3_LOB01 datafile '/ora_data_tbl/d3s1d/d3_d3_lob01_dbf01.dbf' size 10g autoextend on next 10g;
+create tablespace D3_PDD_DATA01 datafile '/ora_data_tbl/d3s1d/d3_PDD_data01_dbf01.dbf' size 10g autoextend on next 10g;
+create tablespace D3_PDD_INDEX01 datafile '/ora_data_tbl/d3s1d/d3_pdd_index01_dbf01.dbf' size 10g autoextend on next 10g;
+create tablespace D3_PDD_LOB01 datafile '/ora_data_tbl/d3s1d/d3_pdd_lob01_dbf01.dbf' size 10g autoextend on next 10g;
+create temporary tablespace D3_PDD_TEMP tempfile '/ora_tmp/d3s1d/d3_pdd_temp_dbf01.dbf' size 10g autoextend on next 10g;
+END
+
+-- import the metadata from the source database and adjust the default tablespaces, roles, etc
+
+
+-- if there are specific roles to create, create them now and the import will give the grants to them
+-- create role D3_LECT;
+-- create role PDD_LECT;
+
+------------------------ perform the import into the target database -----------------------------------------
+
+-- on the target server (s15421u0)
+
+-- get the path of DIRECTORY data_pump_dir
+cat <<END > /tmp/get_data_pump_dir.sql
+connect / as sysdba
+set lines 200 pages 0 echo off head off trim off trims off feed off
+select trim(directory_path) from dba_directories where directory_name='DATA_PUMP_DIR';
+exit
+END
+vdir_path=$(${ORACLE_HOME}/bin/sqlplus -L -S /nolog @/tmp/get_data_pump_dir.sql | tr -d '\r' | tr -d ' ' | tr -d '\n')
+rm -f /tmp/get_data_pump_dir.sql
+echo $vdir_path
+
+-- prepare the parameter file for impdp
+cat <<END > $vdir_path/users_D3_IMP.par
+directory       = data_pump_dir
+dumpfile        = users_D3%U.dmp
+logfile         = users_D3_IMP.log
+schemas         = D3,PDD
+parallel        = 2
+transform       = storage:n
+transform       = segment_attributes:n
+END
+
+-- create the temporary user 'my_imp_user' with IMP_FULL_DATABASE to perform the import
+sqlplus / as sysdba <<END
+create user my_imp_user identified by "SafranAircraft1!" default tablespace system temporary tablespace DEFAUT_TEMP;
+alter user my_imp_user local temporary tablespace DEFAUT_TEMP;
+grant dba to my_imp_user;
+grant imp_full_database to my_imp_user;
+grant unlimited tablespace to my_imp_user;
+END
+
+-- import the schemas
+impdp my_imp_user/"SafranAircraft1!" parfile=$vdir_path/users_D3_IMP.par
+
+-- drop the temporary import user 'my_imp_user'
+sqlplus / as sysdba <<END
+drop user my_imp_user cascade;
+END
+
+-- cleanup the dumps on the target server to free up the disk space
+rm -f /ora_arch_log/d3s1d/users_D3*.dmp
+
+----------------------------- Create the replicat process -------------------------------
+
+-- on the goldengate server (s17650b0)
+
+adminclient
+connect https://s17650b0:443 as oggadmin !
+
+
+-- connect to the target database and create a parallel integrated replicat process
+dblogin useridalias alias_db_target domain DEV
+add replicat rep1, parallel, integrated, exttrail rt checkpointtable ggs_owner.chkptab
+
+
+-- create the parameter file for the replicat process
+edit params rep1
+
+-----------------------------------------------------------------------------
+replicat rep1
+useridalias alias_db_target domain DEV
+reportcount every 1 minute, rate
+reportrollover at 01:00 on sunday
+discardrollover at 01:00 on sunday
+dboptions enable_instantiation_filtering
+ddl include mapped
+ddlerror default abend
+reperror (default,abend)
+ddloptions report
+allownoopupdates
+applynoopupdates
+map_parallelism 3
+min_apply_parallelism 2
+max_apply_parallelism 4
+split_trans_recs 10000
+handlecollisions
+gettruncates
+map D3.*, target D3.*;
+map PDD.*, target PDD.*;
+-----------------------------------------------------------------------------
+
+-- start the replicat process and check if it runs correctly
+start replicat rep1
+info replicat rep1 detail
+view report rep1
+
+
+-- at this point, we should have the extract and the replicat running. 
+
+
+
+----------------------------- start the distpath process -------------------------------
+
+-- We should start the distpath process to transfer the extract trail 'lt' into the replicat trail 'rt' for being applied to the target database
+
+-- start the distpath process and check if it runs correctly
+start distpath ltrt
+info distpath ltrt detail
+
+
+-- at this point, the transactions performed on the source db after the export will be replayed on the target db, and the replication works to catch up the delta
+
+----------------------------- checks and tests ------------------------------------
+
+-- on the goldengate server (s17650b0)
+
+-- check the lag for the extract and the replicat processes
+lag extract ext1
+lag replicat rep1
+
+-- show the statistics for the extract and replicat processes
+stats extract ext1, total, reportrate min
+stats replicat rep1, total, reportrate min
+
+-- we should check the count of some tables to see if it is at a minimum of difference
+-- once the lag is small and the counts are close, we should prepare for the application switch
+-- disconnect the application on the source and waits for the replication to catch up
+
+-- some checks if the replication works (at DML and DDL levels)
+
+-- on the source database
+
+-- create a table into a replicated schema, it should be replicated on the target database
+s06894w0:D3S1D:D3S1D_s06894w0:SYS
+SQL> create table d3.toto(id number);
+
+Table created.
+
+-- create a transaction, insert a row
+s06894w0:D3S1D:D3S1D_s06894w0:SYS
+SQL> insert into d3.toto values(100);
+
+1 row created.
+
+s06894w0:D3S1D:D3S1D_s06894w0:SYS
+SQL> commit;
+
+Commit complete.
+
+
+-- on the target database
+
+-- the table is replicated (DDL replication works)
+SQL> desc d3.toto
+ Name                                      Null?    Type
+ ----------------------------------------- -------- ----------------------------
+ ID                                                 NUMBER
+
+
+-- the row is replicated (DML replication works)
+s15421u0:D3S1D:D3S1D_s15421u0:SYS
+SQL> select * from d3.toto;
+
+        ID
+----------
+       100
+
+1 row selected.
+
+
+-- on the source database
+
+-- drop the table, the drop should be replicated
+s06894w0:D3S1D:D3S1D_s06894w0:SYS
+SQL> drop table d3.toto;
+
+Table dropped.
+
+s06894w0:D3S1D:D3S1D_s06894w0:SYS
+SQL>
+
+-- on the target database
+
+-- the drop was replicated
+s15421u0:D3S1D:D3S1D_s15421u0:SYS
+SQL> desc d3.toto
+ERROR:
+ORA-04043: object d3.toto does not exist
+
+
+-- at this point, the delta replication of transactions is done and we can connect the application to the new target database
+
+-- eventually the replication can be inversed to have the target database replicate into the source one, to keep in sync 
+-- the old source database with the transactions performed on the target database
+
+
+----------------------- stopping and deleting : cleanning up the change synchronization processes and files --------------------------------------
+
+-- on goldengate server (s17650b0)
+
+-- connect to the source database
+dblogin useridalias alias_db_source domain DEV
+
+-- stop, delete and purge the extract
+stop extract ext1
+delete extract ext1
+purge exttrail lt
+
+-- delete the schematrandata
+delete schematrandata D3 allcols
+delete schematrandata PDD allcols
+
+-- delete the trandata
+delete trandata D3.* allcols
+delete trandata PDD.* allcols
+
+-- connect to the target database
+dblogin useridalias alias_db_target domain DEV
+
+-- stop, delete and purge the replicat
+stop replicat rep1
+delete replicat rep1
+purge exttrail rt
+
+-- stop and delete the distpath
+stop distpath ltrt
+delete distpath ltrt
+
+-- delete the goldengate aliases 
+alter credentialstore delete user alias_distpath domain Network
+alter credentialstore delete user alias_db_source domain DEV
+alter credentialstore delete user alias_db_target domain DEV
+
+-- on the source server (s06894w0)
+
+-- drop the user GGS_OWNER and the tablespace GG_DATA
+sqlplus / as sysdba <<END
+alter database no force logging;
+alter database drop supplemental log data (primary key,unique,foreign key,all) columns;
+drop user GGS_OWNER cascade;
+drop tablespace GG_DATA including contents and datafiles;
+END
+
+-- on the target server (s15421u0)
+
+-- drop the user GGS_OWNER and the tablespace GG_DATA
+sqlplus / as sysdba <<END
+alter database no force logging;
+alter database drop supplemental log data (primary key,unique,foreign key,all) columns;
+drop user GGS_OWNER cascade;
+drop tablespace GG_DATA including contents and datafiles;
+END
+
+
+-- check and validate the MSR rules on the target DB

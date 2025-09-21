@@ -1,0 +1,180 @@
+#---------------------------- RMAN configuration ----------------------------
+
+CONFIGURE CONTROLFILE AUTOBACKUP ON;
+CONFIGURE BACKUP OPTIMIZATION ON;
+CONFIGURE DEVICE TYPE DISK BACKUP TYPE TO COMPRESSED BACKUPSET PARALLELISM 2;
+CONFIGURE ARCHIVELOG DELETION POLICY TO BACKED UP 1 TIMES TO DISK;
+CONFIGURE CHANNEL DEVICE TYPE DISK MAXPIECESIZE 200M;
+CONFIGURE RETENTION POLICY TO RECOVERY WINDOW OF 15 DAYS;
+#CONFIGURE ENCRYPTION FOR DATABASE ON;
+#CONFIGURE ENCRYPTION ALGORITHM 'AES256';
+
+list incarnation of database;
+
+spool log to '/tmp/backup.log';
+backup as compressed backupset database plus archivelog delete all input tag 'full_backup';
+spool log off;
+
+backup as copy database plus archivelog delete all input tag 'full_copy';
+
+-- backup the last fullbackup 
+BACKUP DEVICE TYPE disk format '/home/oracle/temp/bbackupset_%U' BACKUPSET completed after 'sysdate-1';
+
+run{
+  shutdown abort;
+  startup nomount;
+  restore controlfile FROM autobackup;
+  alter database mount;
+  restore database preview;
+  restore database section size 1G;  
+  recover database parallel 4;
+  switch datafile all;
+  alter database open resetlogs;
+}
+
+run{
+  alter pluggable database pdb1 close;
+  set until time "to_date('29/01/2025 13:16:00','dd/mm/yyyy hh24:mi:ss')";
+  restore pluggable database pdb1;
+  recover pluggable database pdb1 auxiliary destination '/home/oracle/temp';
+  alter pluggable database pdb1 open resetlogs;
+}
+
+run{
+  RECOVER COPY OF DATABASE WITH TAG 'incr_update' until time 'sysdate - 1';
+  BACKUP
+    INCREMENTAL LEVEL 1
+    FOR RECOVER OF COPY WITH TAG 'incr_update'
+    DATABASE plus archivelog delete all input;
+}
+
+run{
+  BACKUP
+    INCREMENTAL LEVEL 1
+    FOR RECOVER OF COPY WITH TAG 'incr_update'
+    DATABASE plus archivelog delete all input;
+  RECOVER COPY OF DATABASE WITH TAG 'incr_update' until time 'sysdate - 1';
+}
+
+
+#---------------------------- backup strategy - incremental backup ----------------------------
+
+replace script incr_update {
+	recover copy of database with tag 'INCR_UPDATE' until time 'sysdate - 15';
+	backup
+		incremental level 1
+		for recover of copy with tag 'INCR_UPDATE' 
+		database 
+		filesperset 4 
+		plus archivelog 
+		delete all input;
+	delete noprompt obsolete;
+	delete noprompt expired backup;
+	delete noprompt expired copy;
+}
+
+
+# Backup db at level 0, usually run each sunday morning
+
+replace script db_level_0 {
+  backup as compressed backupset 
+     section size 1G
+     incremental level 0
+     database
+     filesperset 4
+     plus archivelog
+          delete all input;
+}
+
+# Restart the failed level 0 backup
+
+replace script restart_db_level_0 {
+  backup as compressed backupset 
+     section size 1G
+     incremental level 0
+     database
+     filesperset 4
+     not backed up since time 'SYSDATE-1'
+     plus archivelog
+          delete all input;
+}
+
+# Backup archive logs, usually every evening
+
+replace script al_all {
+  backup as compressed backupset
+  section size 1G  
+  incremental level 1
+  archivelog all
+          delete all input;
+}
+
+# Backup current controlfile, after structural changes(datafiles,tablespaces, etc)
+
+replace script ccf {
+  backup
+  current controlfile;
+}
+
+
+#---------------------------- Maintenance ----------------------------
+
+# Maintenance script(delete expired and obsolete backups)
+
+replace script maint {
+  crosscheck backup;
+  report need backup;
+  delete noprompt obsolete;
+  delete noprompt expired backup;
+}
+
+
+#---------------------------- RECOVERY ----------------------------
+
+# Restore the database and the controlfile, database status must be mounted
+
+replace script restore_db {
+  restore
+    database controlfile;
+}
+
+# Recover database, after restoring
+
+replace script recover_db {
+  recover
+    database;
+}
+
+# Run the restore and recover together
+
+replace script restore_recover_db {
+  execute script restore_db;
+  execute script recover_db;
+}
+
+# List backups
+
+replace script list_backups {
+  show all;
+  list backup;
+  list backup summary;
+  list restore point all;
+  list incarnation;
+  list failure all;
+}
+
+run{
+  allocate channel prmy1 type disk connect 'sys/"foo"@TRG';
+  allocate channel prmy2 type disk connect 'sys/"foo"@TRG';
+  allocate channel prmy3 type disk connect 'sys/"foo"@TRG';
+  allocate channel prmy4 type disk connect 'sys/"foo"@TRG';
+  allocate auxiliary channel dup1 type disk;
+  allocate auxiliary channel dup2 type disk;
+  allocate auxiliary channel dup3 type disk;
+  allocate auxiliary channel dup4 type disk;
+  DUPLICATE TARGET DATABASE TO TRG
+  FROM ACTIVE DATABASE
+  USING COMPRESSED BACKUPSET  
+  SECTION SIZE 1G
+  NOFILENAMECHECK;
+}

@@ -1,0 +1,38 @@
+-- moving files with RMAN
+
+RMAN> REPORT SCHEMA;
+
+Report of database schema for database with db_unique_name DB11G
+
+List of Permanent Datafiles
+===========================
+File Size(MB) Tablespace           RB segs Datafile Name
+---- -------- -------------------- ------- ------------------------
+1    750      SYSTEM               ***     /u01/app/oracle/oradata/DB11G/system01.dbf
+2    1150     SYSAUX               ***     /u01/app/oracle/oradata/DB11G/sysaux01.dbf
+3    444      UNDOTBS1             ***     /u01/app/oracle/oradata/DB11G/undotbs01.dbf
+4    120      USERS                ***     /u01/app/oracle/oradata/DB11G/users01.dbf
+5    345      EXAMPLE              ***     /u01/app/oracle/oradata/DB11G/example01.dbf
+8    3277     SOE                  ***     /u01/app/oracle/product/11.2.0.2/db_1/dbs/soe.dbf
+
+RMAN>
+RMAN> COPY DATAFILE 8 TO '/u01/app/oracle/oradata/DB11G/soe.dbf';
+RMAN> SQL 'ALTER TABLESPACE soe OFFLINE';
+RMAN> SWITCH DATAFILE 8 TO COPY;
+RMAN> RECOVER TABLESPACE soe;
+RMAN> SQL 'ALTER TABLESPACE soe ONLINE';
+RMAN> HOST 'rm /u01/app/oracle/product/11.2.0.2/db_1/dbs/soe.dbf';
+RMAN> REPORT SCHEMA;
+
+Report of database schema for database with db_unique_name DB11G
+
+List of Permanent Datafiles
+===========================
+File Size(MB) Tablespace           RB segs Datafile Name
+---- -------- -------------------- ------- ------------------------
+1    750      SYSTEM               ***     /u01/app/oracle/oradata/DB11G/system01.dbf
+2    1150     SYSAUX               ***     /u01/app/oracle/oradata/DB11G/sysaux01.dbf
+3    444      UNDOTBS1             ***     /u01/app/oracle/oradata/DB11G/undotbs01.dbf
+4    120      USERS                ***     /u01/app/oracle/oradata/DB11G/users01.dbf
+5    345      EXAMPLE              ***     /u01/app/oracle/oradata/DB11G/example01.dbf
+8    3277     SOE                  ***     /u01/app/oracle/oradata/DB11G/soe.dbf

@@ -1,0 +1,188 @@
+https://gavinsoorma.com.au/knowledge-base/goldengate-online-change-synchronization-with-the-initial-data-load/
+
+-- on GoldenGate 11g
+
+-- on source server (o11g)
+sqlplus / as sysdba << END
+drop user scott cascade;
+create user scott identified by tiger default tablespace users;
+grant connect,resource,unlimited tablespace to scott;
+CREATE TABLE scott.myobjects as SELECT * FROM all_objects;
+END
+
+-- on target server (o11g2)
+sqlplus / as sysdba << END
+drop user scott cascade;
+create user scott identified by tiger default tablespace users;
+grant connect,resource,unlimited tablespace to scott;
+CREATE TABLE scott.myobjects as SELECT * FROM all_objects WHERE 0=1;
+END
+
+
+-- Create the Initial Data Load Extract and Replicat Processes
+
+-- on source server (o11g)
+
+cd $OGG_HOME
+ggsci
+
+ADD EXTRACT ext1, SOURCEISTABLE
+
+edit params ext1
+
+EXTRACT ext1
+USERID ggs_owner, PASSWORD ggs_owner
+RMTHOST o11g2, MGRPORT 7809
+RMTTASK replicat, GROUP rep1
+TABLE scott.myobjects;
+
+
+-- on target server (o11g2)
+
+cd $OGG_HOME
+ggsci
+
+add replicat rep1, specialrun
+
+edit params rep1
+
+REPLICAT rep1
+HANDLECOLLISIONS
+USERID ggs_owner, PASSWORD ggs_owner
+ASSUMETARGETDEFS
+MAP scott.myobjects, TARGET scott.myobjects;
+
+
+
+-- Create the Online Change Synchronization Extract and Replicat Processes
+
+-- on source server (o11g)
+
+cd $OGG_HOME
+ggsci
+
+ADD EXTRACT ext2, TRANLOG, BEGIN NOW
+ADD RMTTRAIL /u01/app/oracle/product/gg/dirdat/zz, EXTRACT ext2
+edit params ext2
+
+EXTRACT ext2
+USERID ggs_owner, PASSWORD  ggs_owner
+RMTHOST o11g2, MGRPORT 7809
+RMTTRAIL /u01/app/oracle/product/gg/dirdat/zz
+TABLE ggs_owner.myobjects;
+
+
+-- on target server (o11g2)
+
+cd $OGG_HOME
+ggsci
+
+add replicat rep2, exttrail /u01/app/oracle/product/gg/dirdat/zz
+
+edit params rep2
+
+REPLICAT rep2
+HANDLECOLLISIONS
+ASSUMETARGETDEFS
+USERID ggs_owner, PASSWORD ggs_owner
+MAP scott.myobjects, TARGET scott.myobjects ;
+
+
+
+
+-- on source server (o11g)
+
+-- Start the Online Change Extract EXT2
+cd $OGG_HOME
+ggsci
+
+start extract ext2
+info extract ext2
+
+
+-- Start the Initial Load Extract
+
+start extract ext1
+info extract ext1
+
+
+
+-- While the Initial Load Extract is in progress make some changes in the database
+
+o11g:DB11G:DB11G:SYS
+SQL> update scott.myobjects set owner='Marius' WHERE owner='SYS';
+
+30788 rows updated.
+
+o11g:DB11G:DB11G:SYS
+SQL> commit;
+
+
+
+-- on target server (o11g2)
+
+cd $OGG_HOME
+ggsci
+
+start replicat rep2
+info replicat rep2
+send replicat rep2 getlag
+
+
+
+-- Verify 
+
+o11g2:DB11G:DB11G:SYS
+SQL> SELECT DISTINCT owner FROM scott.myobjects;
+
+OWNER
+------------------------------
+Marius
+MDSYS
+GGS_OWNER
+PUBLIC
+OUTLN
+CTXSYS
+OLAPSYS
+SYSTEM
+ORACLE_OCM
+EXFSYS
+SCOTT
+
+OWNER
+------------------------------
+DBSNMP
+ORDSYS
+ORDPLUGINS
+APPQOSSYS
+ORDDATA
+XDB
+SYS
+WMSYS
+SI_INFORMTN_SCHEMA
+
+20 rows SELECTed.
+
+
+
+-- stopping and deleting
+
+-- on source server (o11g)
+DBLOGIN USERID ggs_owner, PASSWORD ggs_owner
+stop extract ext1
+delete extract ext1
+stop extract ext2
+delete extract ext2
+
+delete EXTTRAIL /u01/app/oracle/product/gg/dirdat/zz*
+delete RMTTRAIL /u01/app/oracle/product/gg/dirdat/zz*
+
+-- on target server (o11g2)
+DBLOGIN USERID ggs_owner, PASSWORD ggs_owner
+stop replicat rep1
+delete replicat rep1
+stop replicat rep2
+delete replicat rep2
+
+delete EXTTRAIL /u01/app/oracle/product/gg/dirdat/zz*
+delete RMTTRAIL /u01/app/oracle/product/gg/dirdat/zz*

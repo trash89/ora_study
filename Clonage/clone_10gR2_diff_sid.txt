@@ -1,0 +1,211 @@
+-- cannot perform duplicate FROM active database. The backup of the target(source) should be available on the clone server
+
+If the target and duplicate databases reside on different hosts, then you must do one of the following tasks for duplication to be successful:
+- Move backups and disk copies FROM the target host to the duplicate host to the same location as the target host so that the path names are identical
+- Move backups and disk copies FROM the target host to the duplicate host to a new location (so that the path names are different), and then CATALOG them.
+- Make sure that all backups and copies (disk or sbt) on the target host are remotely accessible FROM the duplicate host.
+  Make sure that the archived redo logs are available in the expected location in the new host.
+
+-- different database SID FROM the target(source) (the source SID is TSH1, the target is HST1)
+
+-- on the primary server(o10g), check if the TDE is activated
+sqlplus / as sysdba <<END
+@show_tde10
+END
+
+o10g:TSH1:TSH1:SYS
+SQL> 
+dba_encrypted_columns
+Table							     COLUMN_NAME		    Encryption Alg		   Integrity Al
+------------------------------------------------------------ ------------------------------ ------------------------------ ------------
+TEST.TDE_TEST						     DATA			    AES 192 bits key		   SHA-1
+
+1 row SELECTed.
+
+
+v$encryption_wallet
+STATUS			       WRL_TYPE 	    WRL_PARAMETER
+------------------------------ -------------------- --------------------------------------------------------------------------------
+OPEN			       file		    /u01/app/oracle/admin/TSH1/encryption_keystore/
+
+-- If TDE is activated on the database to be cloned, we have to create folders for the copy
+
+
+-- on the standby server (o10g2)
+
+-- remove old database
+
+rm -rf /u01/app/oracle/admin/TSH1/*
+rm -rf /u01/app/oracle/audit/TSH1/*
+rm -rf /u01/app/oracle/fast_recovery_area/TSH1/*
+rm -rf /u02/oradata/TSH1/*
+rm -f $ORACLE_HOME/dbs/lkTSH1
+rm -f $ORACLE_HOME/dbs/orapwTSH1
+rm -f $ORACLE_HOME/dbs/snapcf_TSH1.f
+rm -f $ORACLE_HOME/dbs/initTSH1.ora
+rm -f $ORACLE_HOME/dbs/spfileTSH1.ora
+rm -f $ORACLE_HOME/dbs/hc_TSH1.dat
+rmdir /u01/app/oracle/admin/TSH1
+rmdir /u01/app/oracle/audit/TSH1
+rmdir /u01/app/oracle/fast_recovery_area/TSH1
+rmdir /u02/oradata/TSH1
+
+-- create the folders for HST1
+mkdir -p /u01/app/oracle/admin/HST1
+mkdir -p /u01/app/oracle/admin/HST1/adump
+mkdir -p /u01/app/oracle/admin/HST1/bdump
+mkdir -p /u01/app/oracle/admin/HST1/cdump
+mkdir -p /u01/app/oracle/admin/HST1/udump
+mkdir -p /u01/app/oracle/admin/HST1/wallet
+mkdir -p /u01/app/oracle/admin/HST1/encryption_keystore
+mkdir -p /u01/app/oracle/audit/HST1
+mkdir -p /u01/app/oracle/fast_recovery_area/HST1/flashback
+mkdir -p /u02/oradata/HST1/changetracking
+
+
+-- backup the primary, then transfer the backup to the secondary
+
+-- make a backup of the primary database
+rman target=sys/manager@o10g:1521/TSH1 <<END
+run{
+ALLOCATE CHANNEL tgt1 TYPE DISK;
+ALLOCATE CHANNEL tgt2 TYPE DISK;
+ALLOCATE CHANNEL tgt3 TYPE DISK;
+ALLOCATE CHANNEL tgt4 TYPE DISK;
+backup as compressed backupset database plus archivelog delete all input tag 'full_backup';
+}
+END
+
+-- backup the backupset
+rman target=sys/manager@o10g:1521/TSH1 <<END
+run{
+ALLOCATE CHANNEL tgt1 TYPE DISK;
+ALLOCATE CHANNEL tgt2 TYPE DISK;
+ALLOCATE CHANNEL tgt3 TYPE DISK;
+ALLOCATE CHANNEL tgt4 TYPE DISK;
+BACKUP format '/home/oracle/temp/bbackupset_%U' BACKUPSET completed after 'sysdate-1';
+}
+END
+
+-- transfer the backupset
+
+scp oracle@o10g:/home/oracle/temp/bbackupset* oracle@o10g2:/home/oracle/temp
+
+-- transfer the TDE keys
+
+scp oracle@o10g:/u01/app/oracle/admin/TSH1/wallet/* oracle@o10g2:/u01/app/oracle/admin/HST1/wallet
+
+scp oracle@o10g:/u01/app/oracle/admin/TSH1/encryption_keystore/* oracle@o10g2:/u01/app/oracle/admin/HST1/encryption_keystore
+
+-- adjust the sqlnet.ora file like the primary server
+vi $ORACLE_HOME/network/admin/sqlnet.ora
+
+NAMES.DIRECTORY_PATH= (TNSNAMES, EZCONNECT)
+
+ENCRYPTION_WALLET_LOCATION=
+  (SOURCE=(METHOD=FILE)(METHOD_DATA=
+    (DIRECTORY=/u01/app/oracle/admin/HST1/encryption_keystore/)))
+
+vi $ORACLE_HOME/network/admin/listener.ora
+
+SID_LIST_LISTENER =
+  (SID_LIST =
+    (SID_DESC =
+      (SID_NAME = PLSExtProc)
+      (ORACLE_HOME = /u01/app/oracle/product/10.2.0/db_1)
+      (PROGRAM = extproc)
+    )
+    (SID_DESC =
+      (GLOBAL_DBNAME = TSH1)
+      (ORACLE_HOME = /u01/app/oracle/product/10.2.0/db_1)
+      (SID_NAME = TSH1)
+      (ENVS="TNS_ADMIN=$ORACLE_HOME/network/admin")
+    )
+    (SID_DESC =
+      (GLOBAL_DBNAME = HST1)
+      (ORACLE_HOME = /u01/app/oracle/product/10.2.0/db_1)
+      (SID_NAME = HST1)
+      (ENVS="TNS_ADMIN=$ORACLE_HOME/network/admin")
+    )
+    (SID_DESC =
+      (GLOBAL_DBNAME = TSH1_DGMGRL)
+      (ORACLE_HOME = /u01/app/oracle/product/10.2.0/db_1)
+      (SID_NAME = TSH1)
+      (ENVS="TNS_ADMIN=$ORACLE_HOME/network/admin")
+    )
+  )
+
+
+-- restart the listener
+lsnrctl reload
+lsnrctl stop
+lsnrctl start
+
+
+-- create the passwordfile
+export ORACLE_SID=HST1
+orapwd file=$ORACLE_HOME/dbs/orapwHST1 password=manager force=y
+
+-- transfer the spfile FROM the source DB
+
+scp oracle@o10g:/u01/app/oracle/product/10.2.0/db_1/dbs/spfileTSH1.ora oracle@o10g2:/u01/app/oracle/product/10.2.0/db_1/dbs/spfileHST1.ora
+
+-- create a pfile and make ajustments on it
+sqlplus / as sysdba <<END
+create pfile FROM spfile;
+END
+
+sed -i '1,$s/TSH1/HST1/g' $ORACLE_HOME/dbs/initHST1.ora
+
+sed -i '1,$s/LISTENER_HST1//g' $ORACLE_HOME/dbs/initHST1.ora
+
+-- make other changements in the pfile
+
+mv $ORACLE_HOME/dbs/spfileHST1.ora $ORACLE_HOME/dbs/spfileHST1.ora.old
+
+-- create the spfile and start the the instance in nomount
+sqlplus / as sysdba <<END
+create spfile FROM pfile;
+startup nomount
+END
+
+
+rman target=sys/manager@o10g:1521/TSH1 auxiliary=sys/manager@o10g2:1521/HST1 <<END
+run{
+ALLOCATE CHANNEL tgt1 TYPE DISK;
+ALLOCATE CHANNEL tgt2 TYPE DISK;
+ALLOCATE CHANNEL tgt3 TYPE DISK;
+ALLOCATE CHANNEL tgt4 TYPE DISK;
+ALLOCATE AUXILIARY CHANNEL dup1 TYPE DISK;
+ALLOCATE AUXILIARY CHANNEL dup2 TYPE DISK;
+ALLOCATE AUXILIARY CHANNEL dup3 TYPE DISK;
+ALLOCATE AUXILIARY CHANNEL dup4 TYPE DISK;
+DUPLICATE TARGET DATABASE TO HST1
+DB_FILE_NAME_CONVERT=('/u02/oradata/TSH1','/u02/oradata/HST1') 
+LOGFILE
+      GROUP 1 ('/u02/oradata/HST1/redo01.log') SIZE 50M,
+      GROUP 2 ('/u02/oradata/HST1/redo02.log') SIZE 50M,
+      GROUP 3 ('/u02/oradata/HST1/redo03.log') SIZE 50M,
+      GROUP 4 ('/u02/oradata/HST1/redo04.log') SIZE 50M
+NOFILENAMECHECK;
+}
+END
+
+-- enable flashback and block change tracking
+sqlplus / as sysdba <<END
+shutdown immediate;
+startup mount;
+alter database disable block change tracking;
+alter database enable block change tracking;
+alter database flashback off;
+alter database flashback on;
+alter database open;
+END
+
+-- Test the TDE
+o10g2:HST1:HST1:SYS
+SQL> SELECT * FROM test.tde_test;
+
+	ID DATA
+---------- --------------------------------------------------
+	 1 This is a secret!

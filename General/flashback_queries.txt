@@ -1,0 +1,11 @@
+SELECT current_scn FROM v$database;
+SELECT DBMS_FLASHBACK.get_system_change_number FROM dual;
+SELECT TIMESTAMP_TO_SCN(SYSTIMESTAMP) FROM dual;
+
+That SCN is then used with the FLASHBACK_SCN parameter.
+expdp ..... flashback_scn=5474280
+
+The following queries may prove useful for converting between timestamps and SCNs.
+
+SELECT TIMESTAMP_TO_SCN(SYSTIMESTAMP) FROM dual;
+SELECT SCN_TO_TIMESTAMP(5474751) FROM dual;

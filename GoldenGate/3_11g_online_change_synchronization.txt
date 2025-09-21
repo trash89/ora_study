@@ -1,0 +1,130 @@
+https://gavinsoorma.com.au/knowledge-base/oracle-goldengate-tutorial-5-configuring-online-change-synchronization/
+
+-- on GoldenGate 11g
+
+-- on source server (o11g)
+sqlplus / as sysdba << END
+drop user scott cascade;
+create user scott identified by tiger default tablespace users;
+grant connect,resource,unlimited tablespace to scott;
+CREATE TABLE scott.dummy(
+        dummy NUMBER
+);
+INSERT INTO scott.dummy VALUES(0);
+COMMIT;
+END
+
+-- on target server (o11g2)
+sqlplus / as sysdba << END
+drop user scott cascade;
+create user scott identified by tiger default tablespace users;
+grant connect,resource,unlimited tablespace to scott;
+CREATE TABLE scott.dummy(
+        dummy NUMBER
+);
+INSERT INTO scott.dummy VALUES(0);
+COMMIT;
+END
+
+
+-- on source server (o11g)
+
+cd $OGG_HOME
+ggsci
+
+-- Create the Online Extract Group
+ADD EXTRACT ext1, TRANLOG, BEGIN NOW
+
+-- Create the Trail
+ADD RMTTRAIL /u01/app/oracle/product/gg/dirdat/rt, EXTRACT ext1
+
+-- Create a parameter file for the online Extract group ext1
+EDIT PARAMS ext1
+
+EXTRACT ext1
+USERID ggs_owner, PASSWORD ggs_owner
+RMTHOST o11g2, MGRPORT 7809
+RMTTRAIL /u01/app/oracle/product/gg/dirdat/rt
+TABLE scott.dummy;
+
+
+-- on target server (o11g2)
+
+cd $OGG_HOME
+ggsci
+
+-- Create the online Replicat group
+ADD REPLICAT rep1, EXTTRAIL /u01/app/oracle/product/gg/dirdat/rt
+
+-- Create a parameter file for the online Replicat group, rep1
+EDIT PARAMS rep1
+
+REPLICAT rep1
+ASSUMETARGETDEFS
+USERID ggs_owner, PASSWORD ggs_owner
+MAP scott.dummy, TARGET scott.dummy;
+
+
+-- on source server (o11g)
+
+-- Start the Extract process
+START EXTRACT ext1
+STATUS EXTRACT ext1
+INFO EXTRACT ext1
+view report ext1
+
+-- on target server (o11g2)
+
+-- Start the Replicat process
+START REPLICAT rep1
+status replicat rep1
+INFO REPLICAT rep1
+view report rep1
+
+
+
+-- Test 
+-- on source server (o11g)
+
+o11g:DB11G:DB11G:SYS
+SQL> insert into scott.dummy values(100);
+
+1 row created.
+
+o11g:DB11G:DB11G:SYS
+SQL> commit;
+
+Commit complete.
+
+o11g:DB11G:DB11G:SYS
+SQL> update scott.dummy set dummy=1 WHERE dummy=0;
+
+1 row updated.
+
+o11g:DB11G:DB11G:SYS
+SQL> commit;
+
+Commit complete.
+
+
+-- on target server (o11g2)
+
+o11g2:DB11G:DB11G:SYS
+SQL> SELECT * FROM scott.dummy;
+
+     DUMMY
+----------
+	 1
+       100
+
+-- stopping and deleting
+
+-- on source server (o11g)
+DBLOGIN USERID ggs_owner, PASSWORD ggs_owner
+stop extract ext1
+delete extract ext1
+
+-- on target server (o11g2)
+DBLOGIN USERID ggs_owner, PASSWORD ggs_owner
+stop replicat rep1
+delete replicat rep1

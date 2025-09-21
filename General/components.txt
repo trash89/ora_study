@@ -1,0 +1,5 @@
+-- Remove EM DB Console config.
+@$ORACLE_HOME/rdbms/admin/emremove.sql
+
+-- Remove OLAP catalog.
+@$ORACLE_HOME/olap/admin/catnoamd.sql

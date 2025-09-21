@@ -1,0 +1,6 @@
+.hypothesis
+.pytest_cache
+afiedt.buf
+*.lst
+target.sql
+desktop.ini

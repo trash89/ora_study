@@ -1,0 +1,141 @@
+Install Oracle GoldenGate for PostgreSQL Version 23.4.0.24.05 OGGCORE_23.0.0.0.0_LINUX.X64_240426.1726
+
+-- 23ai microservices architecture
+mkdir -p /u01/app/oracle/product/gg23
+
+
+-- add to $HOME/.bash_profile
+# microservices archi
+# 23ai ma
+export OGG_HOME=/u01/app/oracle/product/gg23
+export OGG_ETC_HOME=/home/postgres/depl1/etc
+export OGG_VAR_HOME=/home/postgres/depl1/var
+
+export PATH=$OGG_HOME/bin:$PATH
+export LD_LIBRARY_PATH=$PGHOME/lib:$OGG_HOME/lib:$LD_LIBRARY_PATH
+export ODBCINI=/home/postgres/ODBC.ini
+
+
+
+-- start and stop ServiceManager 23ai
+systemctl start OracleGoldenGate
+systemctl status OracleGoldenGate
+systemctl stop OracleGoldenGate
+
+
+
+Service Manager depl1           5001
+------------------------------------
+Deployment udepl1
+------------------------------------
+Administration Server           5002
+Distribution Server             5003
+Receiver Server                 5004
+Performance Metrics Server      5005
+
+http://pg1:5001
+http://pg2:5001
+
+ggma/s**
+
+-- PostgreSQL Config for PG17
+-- in .bash_profile, load PG17 settings
+. /home/postgres/.pg17
+
+in .psqlrc
+\set PROMPT1 '%n@%m:%>/%/%R%# '
+
+-- create a database in /home/postgres/17/data
+initdb
+
+-- copy settings FROM /home/postgres/pg_conf/17
+cp /home/postgres/pg_conf/17/pg_hba.conf $PGDATA
+cp /home/postgres/pg_conf/17/postgresql.conf $PGDATA
+
+-- create ODBCINI file
+cat <<END>$HOME/ODBC.ini
+[ODBC Drivers]
+Oracle GoldenGate PostgreSQL Wire Protocol=Installed
+
+[ODBC]
+InstallDir=$OGG_HOME/datadirect
+TraceDll=$OGG_HOME/datadirect/lib/ggtrc25.so
+
+[Oracle GoldenGate PostgreSQL Wire Protocol]
+Driver=$OGG_HOME/datadirect/lib/ggpsql25.so
+
+[testdb]
+Driver=$OGG_HOME/datadirect/lib/ggpsql25.so
+Description=Postgres driver
+Database=test
+HostName=$HOSTNAME
+PortNumber=5432
+LogonID=ggs_owner
+Password=ggs_owner
+END
+
+-- start the PG Cluster
+pg_ctl start
+
+psql<<END
+create database test;
+create user ggs_owner with login replication superuser password 'ggs_owner';
+grant create on database test to ggs_owner;
+\c test
+create extension pg_stat_statements;
+create schema ggschema;
+GRANT CREATE, USAGE ON SCHEMA ggschema TO ggs_owner;
+GRANT EXECUTE ON ALL FUNCTIONS IN SCHEMA ggschema TO ggs_owner;
+GRANT SELECT,INSERT, UPDATE,DELETE ON ALL TABLES IN SCHEMA ggschema TO ggs_owner;
+END
+
+
+adminclient
+connect http://pg1:5001 as ggma
+start deployment udepl1
+connect http://pg1:5001 user ggma
+
+connect http://pg2:5001 as ggma
+start deployment udepl1
+connect http://pg2:5001 user ggma
+
+
+edit globals
+GGSCHEMA ggschema
+CHECKPOINTTABLE GGSCHEMA.CHKPTAB
+
+-- with the definition FROM odbc.ini
+alter credentialstore add user ggs_owner@testdb password ggs_owner alias ggs_owner_alias
+-- with host:port/dbname
+alter credentialstore add user ggs_owner@pg1:5432/test password ggs_owner alias ggs_owner_alias
+alter credentialstore add user ggs_owner@pg2:5432/test password ggs_owner alias ggs_owner_alias
+
+-- add heartbeattable and checkpointtable
+dblogin useridalias ggs_owner_alias
+add checkpointtable GGSCHEMA.CHKPTAB
+add heartbeattable
+
+
+git clone https://github.com/trash89/pg_sql --depth=1
+
+-- start_gg.sh
+
+#!/usr/bin/bash
+
+pg_ctl start
+adminclient <<END
+connect http://pg1:5001 as ggma password slayer
+start deployment udepl1
+END
+
+-- stop_gg.sh
+#!/usr/bin/bash
+
+adminclient <<END
+connect http://pg1:5001 as ggma password slayer
+stop deployment udepl1
+END
+pg_ctl stop
+rm -f $PGDATA/log/*
+rm -f $HOME/udepl1/var/log/*
+

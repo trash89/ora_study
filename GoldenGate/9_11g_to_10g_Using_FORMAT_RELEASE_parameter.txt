@@ -1,0 +1,152 @@
+https://gavinsoorma.com.au/knowledge-base/using-the-format-release-parameter-to-handle-goldengate-version-differences/
+
+-- The source is 11.2
+
+[oracle@o11g (DB11G) gg]$ ggsci
+
+Oracle GoldenGate Command Interpreter for Oracle
+Version 11.2.1.0.3 14400833 OGGCORE_11.2.1.0.3_PLATFORMS_120823.1258_FBO
+
+-- The target is 11.1
+
+[oracle@o10g (TSH1) gg]$ ggsci
+
+Oracle GoldenGate Command Interpreter for Oracle
+Version 11.1.1.1.2 OGGCORE_11.1.1.1.2_PLATFORMS_111004.2100 
+
+
+-- on the source server (o11g)
+
+sqlplus / as sysdba << END
+drop user scott cascade;
+create user scott identified by tiger default tablespace users;
+grant connect,resource,unlimited tablespace to scott;
+CREATE TABLE scott.dummy(
+        dummy NUMBER
+);
+INSERT INTO scott.dummy VALUES(0);
+COMMIT;
+END
+
+-- on the target server (o10g)
+
+sqlplus / as sysdba << END
+drop user scott cascade;
+create user scott identified by tiger default tablespace users;
+grant connect,resource,unlimited tablespace to scott;
+CREATE TABLE scott.dummy(
+        dummy NUMBER
+);
+INSERT INTO scott.dummy VALUES(0);
+COMMIT;
+END
+
+
+-- on the source server (o11g)
+cd $OGG_HOME
+ggsci
+
+-- Create the Online Extract Group
+ADD EXTRACT ext1, TRANLOG, BEGIN NOW
+
+-- Create the Trail
+ADD RMTTRAIL /u01/app/oracle/product/gg/dirdat/rt, EXTRACT ext1
+
+-- Create a parameter file for the online Extract group ext1
+EDIT PARAMS ext1
+
+EXTRACT ext1
+USERID ggs_owner, PASSWORD ggs_owner
+RMTHOST o10g, MGRPORT 7809
+RMTTRAIL /u01/app/oracle/product/gg/dirdat/rt
+TABLE scott.dummy;
+
+-- on target server (o10g)
+
+cd $OGG_HOME
+ggsci
+
+-- Create the online Replicat group
+ADD REPLICAT rep1, EXTTRAIL /u01/app/oracle/product/gg/dirdat/rt
+
+-- Create a parameter file for the online Replicat group, rep1
+EDIT PARAMS rep1
+
+REPLICAT rep1
+ASSUMETARGETDEFS
+USERID ggs_owner, PASSWORD ggs_owner
+MAP scott.dummy, TARGET scott.dummy;
+
+
+
+-- on source server (o11g)
+
+-- Start the Extract process
+START EXTRACT ext1
+STATUS EXTRACT ext1
+INFO EXTRACT ext1
+view report ext1
+
+-- on target server (o10g)
+
+-- Start the Replicat process
+START REPLICAT rep1
+status replicat rep1
+INFO REPLICAT rep1
+view report rep1
+
+2025-02-26 08:53:04  ERROR   OGG-01389  File header failed to parse tokens. File /u01/app/oracle/product/gg/dirdat/rt000000, last 
+offset 882, data: 0x     372: 000000013A00000200003B000004000000013C00001400000010141414141414141414141414111414143300007C30000006
+00044558543131000002000332000002000B3300000200023400000200013500000200003600000200013700004A004856657273696F6E2031312E322E312E302E
+33203134343030383333204F47.
+
+
+-- to fix
+
+-- on source server (o11g)
+
+stop extract ext1
+edit params ext1
+
+EXTRACT ext1
+USERID ggs_owner, PASSWORD ggs_owner
+RMTHOST o10g, MGRPORT 7809
+RMTTRAIL /u01/app/oracle/product/gg/dirdat/rt, format release 11.1
+TABLE scott.dummy;
+
+-- We want the extract to now start writing to a new trail file in the older (11.1) format  compatible with the target GG version. 
+-- So we use the ETROLLOVER command for this purpose.
+
+
+GGSCI (o11g) 12> alter extract ext1, etrollover
+
+2025-02-26 08:56:33  INFO    OGG-01520  Rollover performed.  For each affected output trail of Version 10 or higher format, after starting the source extract, issue ALTER EXTSEQNO for that trail's reader (either pump EXTRACT or REPLICAT) to move the reader's scan to the new trail file;  it will not happen automatically.
+EXTRACT altered.
+
+
+-- on target server (o10g)
+
+GGSCI (o10g) 7>  alter replicat rep1 extseqno 1
+REPLICAT altered.
+
+
+-- on source server (o11g)
+start extract ext1
+info extract ext1
+
+-- on target server (o10g)
+start replicat rep1
+info replicat rep1
+
+
+-- stopping and deleting
+
+-- on source server (o11g)
+DBLOGIN USERID ggs_owner, PASSWORD ggs_owner
+stop extract ext1
+delete extract ext1
+
+-- on target server (o10g)
+DBLOGIN USERID ggs_owner, PASSWORD ggs_owner
+stop replicat rep1
+delete replicat rep1

@@ -1,0 +1,108 @@
+sqlplus / as sysdba
+alter session set container=pdb1;
+
+create tablespace scott_data datafile '/u02/oradata/CDB1/pdb1/scott_data01.dbf' size 1m autoextend on next 1m;
+create tablespace scott_indx datafile '/u02/oradata/CDB1/pdb1/scott_indx01.dbf' size 1m autoextend on next 1m;
+create tablespace scott_lob  datafile '/u02/oradata/CDB1/pdb1/scott_lob01.dbf'  size 1m autoextend on next 1m;
+
+create tablespace movie_data datafile '/u02/oradata/CDB1/pdb1/movie_data01.dbf' size 1m autoextend on next 1m;
+create tablespace movie_indx datafile '/u02/oradata/CDB1/pdb1/movie_indx01.dbf' size 1m autoextend on next 1m;
+create tablespace movie_lob  datafile '/u02/oradata/CDB1/pdb1/movie_lob01.dbf'  size 1m autoextend on next 1m;
+
+create tablespace sh_data datafile '/u02/oradata/CDB1/pdb1/sh_data01.dbf' size 1m autoextend on next 1m;
+create tablespace sh_indx datafile '/u02/oradata/CDB1/pdb1/sh_indx01.dbf' size 1m autoextend on next 1m;
+
+create tablespace soe_data datafile '/u02/oradata/CDB1/pdb1/soe_data01.dbf' size 1m autoextend on next 1m;
+create tablespace soe_indx datafile '/u02/oradata/CDB1/pdb1/soe_indx01.dbf' size 1m autoextend on next 1m;
+
+create tablespace tpcc_data datafile '/u02/oradata/CDB1/pdb1/tpcc_data01.dbf' size 1m autoextend on next 1m;
+create tablespace tpcc_indx datafile '/u02/oradata/CDB1/pdb1/tpcc_indx01.dbf' size 1m autoextend on next 1m;
+
+create tablespace tpcds_data datafile '/u02/oradata/CDB1/pdb1/tpcds_data01.dbf' size 1m autoextend on next 1m;
+create tablespace tpcds_indx datafile '/u02/oradata/CDB1/pdb1/tpcds_indx01.dbf' size 1m autoextend on next 1m;
+
+create tablespace tpch_data datafile '/u02/oradata/CDB1/pdb1/tpch_data01.dbf' size 1m autoextend on next 1m;
+create tablespace tpch_indx datafile '/u02/oradata/CDB1/pdb1/tpch_indx01.dbf' size 1m autoextend on next 1m;
+
+create tablespace PASSENGERS_data datafile '/u02/oradata/CDB1/pdb1/passengers_data01.dbf' size 1m autoextend on next 1m;
+create tablespace PASSENGERS_indx datafile '/u02/oradata/CDB1/pdb1/passengers_indx01.dbf' size 1m autoextend on next 1m;
+create tablespace PASSENGERS_lob datafile '/u02/oradata/CDB1/pdb1/passengers_lob01.dbf' size 1m autoextend on next 1m;
+
+
+create user scott       identified by tiger         default tablespace scott_data       temporary tablespace temp;
+create user movie       identified by movie         default tablespace movie_data       temporary tablespace temp;
+create user sh          identified by sh            default tablespace sh_data          temporary tablespace temp;
+create user soe         identified by soe           default tablespace soe_data         temporary tablespace temp;
+create user tpcc        identified by tpcc          default tablespace tpcc_data        temporary tablespace temp;
+create user tpcdslike   identified by tpcdslike     default tablespace tpcds_data       temporary tablespace temp;
+create user tpch        identified by tpch          default tablespace tpch_data        temporary tablespace temp;
+create user passenger   identified by passenger     default tablespace passengers_data  temporary tablespace temp;
+
+grant connect,resource,unlimited tablespace to scott,movie,sh,soe,tpcc,tpcdslike,tpch,passenger;
+grant execute on dbms_lock to tpcdslike,tpcc;
+
+-- get the path of DIRECTORY my_data_pump_dir
+cat <<END > /tmp/get_data_pump_dir.sql
+connect / as sysdba
+set lines 200 pages 0 echo off head off trim off trims off feed off
+alter session set container=pdb1;
+SELECT trim(directory_path) FROM dba_directories WHERE directory_name='MY_DATA_PUMP_DIR';
+exit
+END
+vdir_path=$(${ORACLE_HOME}/bin/sqlplus -L -S /nolog @/tmp/get_data_pump_dir.sql | tr -d '\r' | tr -d ' ' | tr -d '\n')
+rm -f /tmp/get_data_pump_dir.sql
+echo $vdir_path
+
+-- import users bench
+cat <<END > $vdir_path/users_bench_IMP.par
+directory           = my_data_pump_dir
+dumpfile            = users_bench%U.dmp
+logfile             = users_bench_IMP.log
+schemas             = SCOTT,MOVIE,SH,SOE,TPCC,TPCDSLIKE,TPCH,PASSENGER
+parallel            = 4
+#transform           = storage:n
+#transform           = segment_attributes:n
+DATA_OPTIONS        = TRUST_EXISTING_TABLE_PARTITIONS
+PARTITION_OPTIONS   = MERGE
+END
+impdp system/manager@pdb1 parfile=$vdir_path/users_bench_IMP.par
+
+-- export all users into a pdb archive
+alter pluggable database pdb1 close;
+alter pluggable database pdb1 unplug into '/home/oracle/temp/pdb1_users_bench.pdb';
+drop pluggable database pdb1 including datafiles;
+create pluggable database pdb1 as clone using '/home/oracle/temp/pdb1_users_bench.pdb' 
+file_name_convert=('/home/oracle/temp','/u02/oradata/cdb1/pdb1') 
+PATH_PREFIX = '/u02/oradata/cdb1/pdb1/' 
+tempfile reuse
+parallel;
+alter pluggable database pdb1 open read write;
+alter pluggable database pdb1 save state;
+-- list archive
+unzip -l /home/oracle/temp/pdb1_users_bench.pdb
+-- test archive
+unzip -l /home/oracle/temp/pdb1_users_bench.pdb  
+
+
+-- isolating a user in a PDB
+create pluggable database pdb2 FROM pdb1
+user_tablespaces=('USERS','SCOTT_DATA','SCOTT_INDX','SCOTT_LOB')
+file_name_convert=('/u02/oradata/cdb1/pdb1','/u02/oradata/cdb1/pdb2') 
+PATH_PREFIX = '/u02/oradata/cdb1/pdb2/' 
+tempfile reuse
+parallel;
+alter pluggable database pdb2 open read write;
+alter pluggable database pdb2 save state;
+alter session set container=pdb2;
+
+alter pluggable database pdb2 close;
+alter pluggable database pdb2 unplug into '/home/oracle/temp/pdb2_scott.pdb';
+drop pluggable database pdb2 including datafiles;
+create pluggable database pdb2 as clone using '/home/oracle/temp/pdb2_scott.pdb' 
+file_name_convert=('/home/oracle/temp','/u02/oradata/cdb1/pdb2') 
+PATH_PREFIX = '/u02/oradata/cdb1/pdb2/' 
+tempfile reuse
+parallel;
+alter pluggable database pdb2 open read write;
+alter pluggable database pdb2 save state;
+

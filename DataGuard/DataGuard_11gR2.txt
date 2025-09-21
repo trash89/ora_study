@@ -1,0 +1,579 @@
+--- on the primary (o11g)
+
+sqlplus / as sysdba
+-- remove local listener and set db_unique_name
+alter system reset local_listener scope=spfile;
+alter system set db_unique_name='DB11G' scope=spfile;
+
+-- Archivelog mode
+shutdown immediate;
+startup mount;
+alter database archivelog;
+recover until cancel;
+alter database open resetlogs;
+
+-- Force logging
+alter database force logging;
+
+-- Add supplemental log data
+alter database add supplemental log data (primary key,unique,foreign key,all) columns;
+
+-- Make sure at least one logfile is present
+alter system switch logfile;
+alter system switch logfile;
+alter system switch logfile;
+alter system switch logfile;
+
+-- Standby redo log
+@logfile
+-- 3 redo log groups, we should create 3+1=4 standby logfile groups
+alter database add standby logfile group 11 ('/u02/oradata/DB11G/standby_redo01.log') size 50m;
+alter database add standby logfile group 12 ('/u02/oradata/DB11G/standby_redo02.log') size 50m;
+alter database add standby logfile group 13 ('/u02/oradata/DB11G/standby_redo03.log') size 50m;
+alter database add standby logfile group 14 ('/u02/oradata/DB11G/standby_redo04.log') size 50m;
+@logfile
+
+-- FRA
+alter system set db_recovery_file_dest_size=10g scope=both;
+alter system set db_recovery_file_dest='/u01/app/oracle/flash_recovery_area' scope=both;
+
+-- Flashback on
+alter database flashback on;
+
+-- Block change tracking - optional
+alter database enable block change tracking;
+
+
+-- Set remote archivelog destinations
+-- ALTER SYSTEM SET LOG_ARCHIVE_DEST_2='SERVICE=DB11G_STBY NOAFFIRM ASYNC VALID_FOR=(ONLINE_LOGFILES,PRIMARY_ROLE) DB_UNIQUE_NAME=DB11G_STBY';
+-- ALTER SYSTEM SET LOG_ARCHIVE_DEST_STATE_2=ENABLE;
+
+-- Standby file management
+ALTER SYSTEM SET STANDBY_FILE_MANAGEMENT=AUTO;
+
+-- tnsnames.ora on both servers
+vi $ORACLE_HOME/network/admin/tnsnames.ora
+
+DB11G =
+  (DESCRIPTION =
+    (ADDRESS = (PROTOCOL = TCP)(HOST = o11g)(PORT = 1521))
+    (CONNECT_DATA =
+      (SERVER = DEDICATED)
+      (SID = DB11G)
+    )
+  )
+
+DB11G_STBY =
+  (DESCRIPTION =
+    (ADDRESS = (PROTOCOL = TCP)(HOST = o11g2)(PORT = 1521))
+    (CONNECT_DATA =
+      (SERVER = DEDICATED)
+      (SID = DB11G)
+    )
+  )
+
+-- listener.ora on the primary server (o11g)
+vi $ORACLE_HOME/network/admin/listener.ora
+
+LISTENER =
+  (DESCRIPTION_LIST =
+    (DESCRIPTION =
+      (ADDRESS = (PROTOCOL = TCP)(HOST = o11g)(PORT = 1521))
+      (ADDRESS = (PROTOCOL = IPC)(KEY = EXTPROC1521))      
+    )
+  )
+SID_LIST_LISTENER =
+  (SID_LIST =
+    (SID_DESC =
+      (GLOBAL_DBNAME = DB11G)
+      (ORACLE_HOME = /u01/app/oracle/product/11.2.0.4/db_1)
+      (SID_NAME = DB11G)
+      (ENVS="TNS_ADMIN=$ORACLE_HOME/network/admin")
+    )
+    (SID_DESC =
+      (GLOBAL_DBNAME = DB11G_DGMGRL)
+      (ORACLE_HOME = /u01/app/oracle/product/11.2.0.4/db_1)
+      (SID_NAME = DB11G)
+      (ENVS="TNS_ADMIN=$ORACLE_HOME/network/admin")
+    )
+  )
+ADR_BASE_LISTENER = /u01/app/oracle
+
+-- listener.ora on the STANDBY server (o11g2)
+vi $ORACLE_HOME/network/admin/listener.ora
+
+LISTENER =
+  (DESCRIPTION_LIST =
+    (DESCRIPTION =
+      (ADDRESS = (PROTOCOL = TCP)(HOST = o11g2)(PORT = 1521))
+      (ADDRESS = (PROTOCOL = IPC)(KEY = EXTPROC1521))      
+    )
+  )
+SID_LIST_LISTENER =
+  (SID_LIST =
+    (SID_DESC =
+      (GLOBAL_DBNAME = DB11G_STBY)
+      (ORACLE_HOME = /u01/app/oracle/product/11.2.0.4/db_1)
+      (SID_NAME = DB11G)
+      (ENVS="TNS_ADMIN=$ORACLE_HOME/network/admin")
+    )
+    (SID_DESC =
+      (GLOBAL_DBNAME = DB11G_STBY_DGMGRL)
+      (ORACLE_HOME = /u01/app/oracle/product/11.2.0.4/db_1)
+      (SID_NAME = DB11G)
+      (ENVS="TNS_ADMIN=$ORACLE_HOME/network/admin")
+    )
+  )
+ADR_BASE_LISTENER = /u01/app/oracle
+
+-- Restart listener on both servers
+lsnrctl stop
+lsnrctl start
+
+
+
+-- on the standby server (o11g2):
+
+-- Cleanup the old database
+cd $ORACLE_HOME/scripts
+./stop_all.sh
+
+-- Remove files and folders
+rm -rf /u01/app/oracle/admin/DB11G/*
+rm -rf /u01/app/oracle/audit/DB11G/*
+rm -rf /u01/app/oracle/diag/rdbms/db11g/*
+rm -rf /u01/app/oracle/flash_recovery_area/DB11G/*
+rm -rf /u02/oradata/DB11G/*
+rm -f $ORACLE_HOME/dbs/lkDB11G
+rm -f $ORACLE_HOME/dbs/orapwDB11G
+rm -f $ORACLE_HOME/dbs/initDB11G.ora
+rm -f $ORACLE_HOME/dbs/spfileDB11G.ora
+rm -f $ORACLE_HOME/dbs/hc_DB11G.dat
+rmdir /u01/app/oracle/admin/DB11G
+rmdir /u01/app/oracle/audit/DB11G
+rmdir /u01/app/oracle/diag/rdbms/db11g
+rmdir /u01/app/oracle/flash_recovery_area/DB11G
+rmdir /u02/oradata/DB11G
+
+-- create folders for the standby database
+mkdir -p /u01/app/oracle/admin/DB11G_STBY
+mkdir -p /u01/app/oracle/admin/DB11G_STBY/adump
+mkdir -p /u01/app/oracle/admin/DB11G_STBY/wallet
+mkdir -p /u01/app/oracle/admin/DB11G_STBY/encryption_keystore
+mkdir -p /u01/app/oracle/audit/DB11G_STBY
+mkdir -p /u01/app/oracle/diag/rdbms/db11g_stby/DB11G_STBY
+mkdir -p /u01/app/oracle/flash_recovery_area/DB11G_STBY/flashback
+mkdir -p /u02/oradata/DB11G_STBY/changetracking
+
+-- re-create the folder for the audit with the name of the original database to be cloned
+mkdir -p /u01/app/oracle/admin/DB11G/adump
+
+
+-- transfer the TDE keys
+
+scp oracle@o11g:/u01/app/oracle/admin/DB11G/walet/* oracle@o11g2:/u01/app/oracle/admin/DB11G/wallet
+
+scp oracle@o11g:/u01/app/oracle/admin/DB11G/encryption_keystore/* oracle@o11g2:/u01/app/oracle/admin/DB11G_STBY/encryption_keystore
+
+-- adjust the sqlnet.ora file like the primary server
+vi $ORACLE_HOME/network/admin/sqlnet.ora
+
+NAMES.DIRECTORY_PATH= (TNSNAMES, EZCONNECT)
+
+ENCRYPTION_WALLET_LOCATION=
+  (SOURCE=(METHOD=FILE)(METHOD_DATA=
+    (DIRECTORY=/u01/app/oracle/admin/DB11G_STBY/encryption_keystore/)))
+
+-- restart the listener
+
+lsnrctl stop
+lsnrctl start
+
+
+-- Create an init.ora file
+echo "*.db_name='DB11G'"            >/tmp/initDB11G_stby.ora
+echo "*.compatible='11.2.0.0.0'"    >>/tmp/initDB11G_stby.ora
+
+-- Create a password file
+orapwd file=$ORACLE_HOME/dbs/orapwDB11G password=manager force=Y
+
+-- Start the auxiliary instance
+export ORACLE_SID=DB11G
+sqlplus / as sysdba << END
+startup nomount pfile='/tmp/initDB11G_stby.ora';
+END
+
+-- Connect to RMAN, specifying a full connect string for both the TARGET and AUXILIARY instances. Do not attempt to use OS authentication.
+-- Duplicate for standby
+rman TARGET sys/manager@db11g AUXILIARY sys/manager@db11g_stby << END
+run{
+ALLOCATE CHANNEL tgt1 TYPE DISK; 
+ALLOCATE CHANNEL tgt2 TYPE DISK; 
+ALLOCATE CHANNEL tgt3 TYPE DISK; 
+ALLOCATE CHANNEL tgt4 TYPE DISK; 
+ALLOCATE AUXILIARY CHANNEL dup1 TYPE DISK;
+ALLOCATE AUXILIARY CHANNEL dup2 TYPE DISK;
+ALLOCATE AUXILIARY CHANNEL dup3 TYPE DISK;
+ALLOCATE AUXILIARY CHANNEL dup4 TYPE DISK;
+DUPLICATE TARGET DATABASE
+  FOR STANDBY
+  FROM ACTIVE DATABASE
+  DORECOVER
+  SPFILE
+    PARAMETER_VALUE_CONVERT
+      '/u01/app/oracle/admin/DB11G','/u01/app/oracle/admin/DB11G_STBY'
+      '/u01/app/oracle/flash_recovery_area/DB11G','/u01/app/oracle/flash_recovery_area/DB11G_STBY',
+      '/u02/oradata/DB11G', '/u02/oradata/DB11G_STBY'
+    SET db_unique_name='DB11G_STBY' COMMENT 'Is standby'
+    SET db_file_name_convert=
+      '/u02/oradata/DB11G/','/u02/oradata/DB11G_STBY/',
+      '/u01/app/oracle/flash_recovery_area/DB11G/','/u01/app/oracle/flash_recovery_area/DB11G_STBY/'
+    SET log_file_name_convert=
+      '/u02/oradata/DB11G/','/u02/oradata/DB11G_STBY/'
+    SET job_queue_processes='0'
+  NOFILENAMECHECK;
+}
+END
+
+-- enable flashback and block change tracking
+sqlplus / as sysdba << END
+alter database disable block change tracking;
+alter database enable block change tracking;
+alter database flashback off;
+alter database flashback on;
+END
+
+-- Enable Broker on both databases
+sqlplus / as sysdba << END
+ALTER SYSTEM SET dg_broker_start=true;
+END
+
+-- On the primary server, issue the following command to register the primary server with the broker.
+dgmgrl sys/manager@db11g
+DGMGRL> CREATE CONFIGURATION my_dg_config AS PRIMARY DATABASE IS DB11G CONNECT IDENTIFIER IS DB11G;
+
+-- Now add the standby database
+DGMGRL> ADD DATABASE DB11G_STBY AS CONNECT IDENTIFIER IS DB11G_STBY;
+
+-- Now enable the configuration
+DGMGRL> ENABLE CONFIGURATION;
+
+-- The following commands show how to check the configuration and status of the databases FROM the broker.
+DGMGRL> show configuration;
+DGMGRL> SHOW DATABASE db11g;
+DGMGRL> SHOW DATABASE db11g_stby;
+
+-- the recommended configuration for archived log maintenance - execute on primary only
+rman target=/ <<END
+CONFIGURE BACKUP OPTIMIZATION ON;
+CONFIGURE CONTROLFILE AUTOBACKUP ON;
+CONFIGURE ARCHIVELOG DELETION POLICY TO BACKED UP 1 TIMES TO DISK;
+CONFIGURE ENCRYPTION FOR DATABASE ON;
+CONFIGURE ENCRYPTION ALGORITHM 'AES256';
+END
+
+
+-- Database Switchover
+Connect to the primary database (db11g) and switchover to the standby database (db11g_stby).
+
+dgmgrl sys/manager@db11g
+DGMGRL> SWITCHOVER TO db11g_stby;
+
+
+-- Switch back to the original primary. Connect to the new primary (db11g_stby) and switchover to the new standby database (db11g).
+
+dgmgrl sys/manager@db11g_stby
+DGMGRL> SWITCHOVER TO db11g;
+
+
+-- Database Failover
+If the primary database is not available the standby database can be activated as a primary database using the following statements. Connect to the standby database (db11g_stby) and failover.
+
+dgmgrl sys/manager@db11g_stby
+DGMGRL> FAILOVER TO db11g_stby;
+
+-- The original primary database can now be configured as a standby. 
+If flashback database was enabled on the primary database, then this can be done relatively easily with the following command.
+
+dgmgrl sys/manager@db11g_stby
+DGMGRL> REINSTATE DATABASE db11g;
+
+
+------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
+-- if the redo transport is broken, we should reconfigure db11g as a standby FROM db11g_stby
+sqlplus / as sysdba
+shutdown abort
+exit
+
+-- Remove files and folders
+rm -rf /u02/oradata/DB11G/*
+rm -rf /u01/app/oracle/flash_recovery_area/DB11G/*
+rm -rf /u01/app/oracle/audit/DB11G/*
+rm -rf /u01/app/oracle/admin/DB11G/adump/*
+rm -rf /u01/app/oracle/admin/DB11G/dpdump/*
+rm -f $ORACLE_HOME/dbs/*DB11G*
+-- create folders 
+mkdir -p /u02/oradata/DB11G
+mkdir -p /u01/app/oracle/flash_recovery_area/DB11G
+mkdir -p /u01/app/oracle/admin/DB11G/adump
+mkdir -p /u01/app/oracle/admin/DB11G_STBY/adump
+
+-- Create an init.ora file
+echo "*.db_name='DB11G'">/tmp/initDB11G.ora
+
+-- Create a password file
+orapwd file=$ORACLE_HOME/dbs/orapwDB11G password=manager entries=10
+
+-- Start the auxiliary instance
+export ORACLE_SID=DB11G
+sqlplus / as sysdba <<END
+startup nomount pfile='/tmp/initDB11G.ora';
+END
+
+-- Duplicate database
+rman TARGET sys/manager@db11g_stby AUXILIARY sys/manager@db11g << END
+run{
+ALLOCATE CHANNEL tgt1 TYPE DISK; 
+ALLOCATE CHANNEL tgt2 TYPE DISK; 
+ALLOCATE CHANNEL tgt3 TYPE DISK; 
+ALLOCATE CHANNEL tgt4 TYPE DISK; 
+ALLOCATE AUXILIARY CHANNEL dup1 TYPE DISK;
+ALLOCATE AUXILIARY CHANNEL dup2 TYPE DISK;
+ALLOCATE AUXILIARY CHANNEL dup3 TYPE DISK;
+ALLOCATE AUXILIARY CHANNEL dup4 TYPE DISK;
+DUPLICATE TARGET DATABASE
+  FOR STANDBY
+  FROM ACTIVE DATABASE
+  DORECOVER
+  SPFILE
+    PARAMETER_VALUE_CONVERT
+      '/u01/app/oracle/admin/DB11G_STBY','/u01/app/oracle/admin/DB11G'
+      '/u01/app/oracle/flash_recovery_area/DB11G_STBY','/u01/app/oracle/flash_recovery_area/DB11G',
+      '/u02/oradata/DB11G_STBY', '/u02/oradata/DB11G'
+    SET db_unique_name='DB11G' COMMENT 'Is standby'
+    SET db_file_name_convert=
+      '/u02/oradata/DB11G_STBY/','/u02/oradata/DB11G/',
+      '/u01/app/oracle/flash_recovery_area/DB11G_STBY/','/u01/app/oracle/flash_recovery_area/DB11G/'
+    SET log_file_name_convert=
+      '/u02/oradata/DB11G_STBY/','/u02/oradata/DB11G/'
+    SET job_queue_processes='0'
+  NOFILENAMECHECK;
+}
+END
+
+-- enable flashback and block change tracking
+sqlplus / as sysdba << END
+alter database disable block change tracking;
+alter database enable block change tracking;
+alter database flashback off;
+alter database flashback on;
+END
+
+-- Enable database
+dgmgrl sys/manager@db11g_stby
+DGMGRL> ENABLE DATABASE db11g;
+DGMGRL> ENABLE configuration;
+DGMGRL> show database db11g;
+DGMGRL> switchover to db11g;
+
+-- Re-create the configuration
+disable configuration;
+remove configuration;
+CREATE CONFIGURATION my_dg_config AS PRIMARY DATABASE IS DB11G_STBY CONNECT IDENTIFIER IS DB11G_STBY;
+ADD DATABASE DB11G AS CONNECT IDENTIFIER IS DB11G;
+
+------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
+-- Stop Redo Apply.
+To stop the MRP, issue the following command:
+ALTER DATABASE RECOVER MANAGED STANDBY DATABASE CANCEL;
+
+-- Start Redo Apply in the background.
+In order to start the Redo Apply service in the background, use the disconnect FROM session option. 
+This command will return you to the SQL command line once the Redo Apply service is started. 
+-- in v$managed_standby, process MRP0 is in status WAIT_FOR_LOG
+Run the following statement on the standby database:
+SQL> alter database recover managed standby database disconnect FROM session;
+
+
+-- Redo-apply in Real-Time apply mode
+-- in v$managed_standby, process MRP0 is in status APPLYING_LOG
+ALTER DATABASE RECOVER MANAGED STANDBY DATABASE USING CURRENT LOGFILE DISCONNECT FROM SESSION;
+
+-- Read-Only Standby and Active Data Guard
+In 11g, Oracle introduced the Active Data Guard feature. This allows the standby database to be open in read-only mode, but still apply redo information. This means a standby can be available for querying, yet still be up to date. There are licensing implications for this feature, but the following commands show how active data guard can be enabled.
+
+-- in v$managed_standby, process MRP0 is in status WAIT_FOR_LOG
+ALTER DATABASE RECOVER MANAGED STANDBY DATABASE CANCEL;
+alter database close;
+ALTER DATABASE OPEN READ ONLY;
+ALTER DATABASE RECOVER MANAGED STANDBY DATABASE DISCONNECT FROM SESSION;
+
+-- Test the TDE
+o11g2:DB11G:DB11G_STBY:SYS
+SQL> select * from test.tde_test;
+
+	ID DATA
+---------- --------------------------------------------------
+	 1 This is a secret!
+
+
+-- Active Data Guard in Real-Time apply mode
+-- in v$managed_standby, process MRP0 is in status APPLYING_LOG
+ALTER DATABASE RECOVER MANAGED STANDBY DATABASE CANCEL;
+alter database close;
+ALTER DATABASE OPEN READ ONLY;
+ALTER DATABASE RECOVER MANAGED STANDBY DATABASE USING CURRENT LOGFILE DISCONNECT FROM SESSION;
+
+-- Snapshot Standby
+Introduced in 11g, snapshot standby allows the standby database to be opened in read-write mode. 
+When switched back into standby mode, all changes made whilst in read-write mode are lost. 
+This is achieved using flashback database, but the standby database does not need to have flashback database explicitly enabled 
+to take advantage of this feature, thought it works just the same if it is.
+
+-- Connect to the primary (db11g) database and convert the standby database (db11g_stby) to a snapshot standby.
+dgmgrl sys/manager@db11g
+DGMGRL> CONVERT DATABASE db11g_stby TO SNAPSHOT STANDBY;
+
+SELECT name,restore_point_time FROM v$restore_point;
+
+-- When you are finished with the snapshot standby, convert it back to a standby database.
+dgmgrl sys/manager@db11g
+DGMGRL> CONVERT DATABASE db11g_stby TO PHYSICAL STANDBY;
+
+-- if this error, alter system switch logfile; on the snapshot standby, then re-create
+Configuration - my_dg_config
+
+  Protection Mode: MaxPerformance
+  Databases:
+    db11g      - Primary database
+    db11g_stby - Snapshot standby database (disabled)
+      ORA-16795: the standby database needs to be re-created
+
+
+-- Show the database configuration in Broker verbose
+
+DGMGRL> show database verbose db11g;
+DGMGRL> show database verbose db11g_stby;
+
+-- Changing protection modes
+DGMGRL> show configuration;
+
+Configuration - my_dg_config
+
+  Protection Mode: MaxPerformance
+  Databases:
+    db11g      - Primary database
+    db11g_stby - Physical standby database
+
+Fast-Start Failover: DISABLED
+
+Configuration Status:
+SUCCESS
+
+DGMGRL> SHOW DATABASE VERBOSE db11g LogXptMode;
+DGMGRL> SHOW DATABASE VERBOSE db11g_stby LogXptMode;
+
+DGMGRL> EDIT DATABASE db11g SET PROPERTY LOGXPTMODE='SYNC';
+DGMGRL> EDIT DATABASE db11g_stby SET PROPERTY LOGXPTMODE='SYNC';
+
+DGMGRL> EDIT CONFIGURATION SET PROTECTION MODE AS MaxAvailability;
+
+DGMGRL> show configuration;
+
+Configuration - my_dg_config
+
+  Protection Mode: MaxAvailability
+  Databases:
+    db11g      - Primary database
+    db11g_stby - Physical standby database
+
+Fast-Start Failover: DISABLED
+
+Configuration Status:
+SUCCESS
+
+-- change back to MaxPerformance
+DGMGRL> EDIT CONFIGURATION SET PROTECTION MODE AS MaxPerformance;
+DGMGRL> EDIT DATABASE db11g SET PROPERTY LOGXPTMODE='ASYNC';
+DGMGRL> EDIT DATABASE db11g_stby SET PROPERTY LOGXPTMODE='ASYNC';
+DGMGRL> show configuration;
+
+
+
+-- Example property changes
+DGMGRL> EDIT DATABASE 'DB11G' SET PROPERTY 'LogArchiveFormat'='log_%t_%s_%r_%d.arc';
+DGMGRL> EDIT DATABASE 'DB11G' SET PROPERTY LogXptMode=SYNC;
+DGMGRL> EDIT DATABASE 'DB11G' SET PROPERTY LogShipping=OFF;
+DGMGRL> EDIT DATABASE 'DB11G' SET PROPERTY NetTimeout=30;
+DGMGRL> EDIT DATABASE 'DB11G' SET PROPERTY 'ReopenSecs'=400;
+DGMGRL> EDIT DATABASE 'DB11G' SET PROPERTY ArchiveLagTarget=800;
+DGMGRL> EDIT DATABASE 'DB11G' SET PROPERTY DelayMins='540';
+
+
+--- Logical Data Guard
+
+-- on the physical standby, run the script:
+@ldg_prep
+
+-- on the primary, add the missing PK/UK
+ALTER TABLE SCOTT.BONUS ADD PRIMARY KEY (ENAME) RELY DISABLE;
+ALTER TABLE SCOTT.SALGRADE ADD PRIMARY KEY (GRADE) RELY DISABLE;
+ALTER TABLE SCOTT.DUMMY ADD PRIMARY KEY (DUMMY) RELY DISABLE;
+
+-- Optional, on the primary database to prepare the role transition
+ALTER SYSTEM SET LOG_ARCHIVE_DEST_1='LOCATION=/u01/app/oracle/flash_recovery_area/DB11G/archive VALID_FOR=(ONLINE_LOGFILES,ALL_ROLES) DB_UNIQUE_NAME=DB11G' SCOPE=BOTH;
+ALTER SYSTEM SET LOG_ARCHIVE_DEST_3='LOCATION=/u01/app/oracle/flash_recovery_area/DB11G/archive_std VALID_FOR=(STANDBY_LOGFILES,STANDBY_ROLE) DB_UNIQUE_NAME=DB11G' SCOPE=BOTH;
+alter system set LOG_ARCHIVE_DEST_STATE_3=ENABLE;
+
+-- disable Data Guard Broker
+dgmgrl sys/manager@db11g
+disable database db11g_stby;
+disable configuration;
+remove configuration;
+
+sqlplus / as sysdba
+ALTER SYSTEM SET DG_BROKER_START=FALSE SCOPE=BOTH;
+alter system reset log_archive_config;
+
+
+-- on the standby, cancel the recovery
+ALTER DATABASE RECOVER MANAGED STANDBY DATABASE CANCEL;
+
+-- on the primary, build the logminer dictionary
+EXECUTE DBMS_LOGSTDBY.BUILD;
+
+-- on the standby, execute the recover to the scn of dictionary build
+shutdown immediate;
+startup mount exclusive;
+ALTER DATABASE RECOVER TO LOGICAL STANDBY DB11G;
+
+There are two kinds of archived redo logfiles on the logical standby databases. The first one is created FROM the online redo logs 
+and the second is created FROM the standby redo logs. We'll create separate desinaions for these archived logiles using the following query:
+
+ALTER SYSTEM SET LOG_ARCHIVE_DEST_1='LOCATION=/u01/app/oracle/flash_recovery_area/archive VALID_FOR=(ONLINE_LOGFILES,ALL_ROLES) DB_UNIQUE_NAME=DB11G_STBY';
+ALTER SYSTEM SET LOG_ARCHIVE_DEST_2='SERVICE=DB11G_STBY ASYNC VALID_FOR=(ONLINE_LOGFILES,PRIMARY_ROLE) DB_UNIQUE_NAME=DB11G_STBY';
+
+ALTER SYSTEM SET LOG_ARCHIVE_DEST_3='LOCATION=/u01/app/oracle/flash_recovery_area/archive_std VALID_FOR=(STANDBY_LOGFILES,STANDBY_ROLE) DB_UNIQUE_NAME="db11g"';
+
+ALTER SYSTEM SET LOG_ARCHIVE_DEST_1='LOCATION=USE_DB_RECOVERY_FILE_DEST';
+
+-- open resetlogs of the logical standby
+shutdown immediate;
+startup mount;
+alter database open resetlogs;
+
+-- start the SQL Apply
+alter database start logical standby apply immediate;
+
+
+-- skip rules on a logical standby database
+-- stop the logical standby
+ALTER DATABASE STOP LOGICAL STANDBY APPLY;
+-- apply the rules
+EXECUTE DBMS_LOGSTDBY.SKIP(STMT => 'DML', SCHEMA_NAME =>'SCOTT', OBJECT_NAME => 'TEST_LOB');
+EXECUTE DBMS_LOGSTDBY.SKIP(STMT => 'SCHEMA_DDL',SCHEMA_NAME => 'SCOTT', OBJECT_NAME => 'TEST_LOB');
+EXECUTE DBMS_LOGSTDBY.SKIP(STMT => 'DML', SCHEMA_NAME =>'HR', OBJECT_NAME => '%');
+EXECUTE DBMS_LOGSTDBY.SKIP(STMT => 'DIRECTORY');
+
+-- restart the SQL Apply
+alter database start logical standby apply immediate;

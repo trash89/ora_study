@@ -1,0 +1,137 @@
+-- non-multitenant databases (ORCL)
+
+-- same database SID as the target(source)
+
+-- on the source server (o19cs), change the SYS and SYSTEM password
+
+sqlplus / as sysdba <<END
+alter user sys identified by "manager123*";
+alter user system identified by "manager123*";
+END
+
+-- verify if TDE is in place for the source database
+sqlplus / as sysdba<<END
+@show_tde
+END
+
+o19cs:ORCL:ORCL:SYS
+SQL> 
+dba_encrypted_columns
+Table							     COLUMN_NAME		    Encryption Alg		   Integrity Al
+------------------------------------------------------------ ------------------------------ ------------------------------ ------------
+TEST.TDE_TEST						     DATA			    AES 192 bits key		   SHA-1
+
+1 row selected.
+
+
+v$encryption_wallet
+Con STATUS			   WRL_TYPE		WALLET_TYPE	     W order   Backuped  WRL_PARAMETER
+--- ------------------------------ -------------------- -------------------- --------- --------- --------------------------------------------------------------------------------
+  0 OPEN			   FILE 		AUTOLOGIN	     SINGLE    NO	 /u01/app/oracle/admin/ORCL/encryption_keystore/tde/
+
+v$encryption_keys
+Con KEY_ID								   TAG				  USER				 KEY_USE    KEYSTORE_TYPE     BACKED_UP
+--- ---------------------------------------------------------------------- ------------------------------ ------------------------------ ---------- ----------------- ---------
+  0 AapoT7QwXE9evw4nK6kEmSkAAAAAAAAAAAAAAAAAAAAAAAAAAAAA		   master key			  SYS				 TDE	    SOFTWARE KEYSTORE NO
+
+Creation Time	    Activation Time	Creator:DBNAME/PDBNAME				   Activating:DBNAME/PDBNAME
+------------------- ------------------- -------------------------------------------------- --------------------------------------------------
+06/03/2025 05:22:05 06/03/2025 05:22:05 ORCL/						   ORCL/
+
+1 row selected.
+
+
+sys.x$kcbdbk, if mkloc == 0, no encryption enabled
+Con	 MKLOC
+--- ----------
+  0	     1
+
+
+-- on the standby server (o19cs2)
+
+-- remove old database
+rm -rf /u01/app/oracle/admin/ORCL/*
+rm -rf /u01/app/oracle/audit/ORCL/*
+rm -rf /u01/app/oracle/diag/rdbms/orcl/*
+rm -rf /u01/app/oracle/recovery_area/ORCL/*
+rm -f $ORACLE_HOME/dbs/lkORCL
+rm -f $ORACLE_HOME/dbs/orapwORCL
+rm -f $ORACLE_HOME/dbs/initORCL.ora
+rm -f $ORACLE_HOME/dbs/snapcf_ORCL.f
+rm -f $ORACLE_HOME/dbs/spfileORCL.ora
+rm -f $ORACLE_HOME/dbs/hc_ORCL.dat
+rm -f $ORACLE_HOME/rdbms/log/*ORCL*
+rm -rf /u02/oradata/ORCL/*
+rmdir /u01/app/oracle/admin/ORCL
+rmdir /u01/app/oracle/audit/ORCL
+rmdir /u01/app/oracle/diag/rdbms/orcl
+rmdir /u01/app/oracle/recovery_area/ORCL
+rmdir /u02/oradata/ORCL
+
+-- re-create the folders
+mkdir -p /u01/app/oracle/admin/ORCL/adump
+mkdir -p /u01/app/oracle/admin/ORCL/wallet
+mkdir -p /u01/app/oracle/admin/ORCL/xdb_wallet
+mkdir -p /u01/app/oracle/admin/ORCL/encryption_keystore/tde
+mkdir -p /u01/app/oracle/audit/ORCL
+mkdir -p /u01/app/oracle/diag/rdbms/orcl/ORCL
+mkdir -p /u01/app/oracle/recovery_area/ORCL/flashback
+mkdir -p /u02/oradata/ORCL/changetracking
+
+-- transfer the TDE keys
+
+scp oracle@o19cs:/u01/app/oracle/admin/ORCL/wallet/* oracle@o19cs2:/u01/app/oracle/admin/ORCL/wallet
+
+scp oracle@o19cs:/u01/app/oracle/admin/ORCL/xdb_wallet/* oracle@o19cs2:/u01/app/oracle/admin/ORCL/xdb_wallet
+
+scp oracle@o19cs:/u01/app/oracle/admin/ORCL/encryption_keystore/tde/* oracle@o19cs2:/u01/app/oracle/admin/ORCL/encryption_keystore/tde
+
+
+export ORACLE_SID=ORCL
+orapwd file=$ORACLE_HOME/dbs/orapwORCL password=manager123* force=y
+
+-- Create an init.ora file
+
+echo "*.db_name='ORCL'"          >$ORACLE_HOME/dbs/initORCL.ora
+echo "*.compatible='19.3.0'"    >>$ORACLE_HOME/dbs/initORCL.ora
+
+sqlplus / as sysdba <<END
+startup nomount;
+create spfile FROM pfile;
+END
+
+
+rman target=sys/manager123*@o19cs:1521/ORCL auxiliary=sys/manager123*@o19cs2:1521/ORCL <<END
+run{
+ALLOCATE CHANNEL tgt1 TYPE DISK;
+ALLOCATE CHANNEL tgt2 TYPE DISK;
+ALLOCATE CHANNEL tgt3 TYPE DISK;
+ALLOCATE CHANNEL tgt4 TYPE DISK;
+ALLOCATE AUXILIARY CHANNEL dup1 TYPE DISK;
+ALLOCATE AUXILIARY CHANNEL dup2 TYPE DISK;
+ALLOCATE AUXILIARY CHANNEL dup3 TYPE DISK;
+ALLOCATE AUXILIARY CHANNEL dup4 TYPE DISK;
+DUPLICATE TARGET DATABASE TO ORCL
+FROM ACTIVE DATABASE 
+SPFILE
+PARAMETER_VALUE_CONVERT 
+    '/u01/app/oracle/admin/ORCL','/u01/app/oracle/admin/ORCL',
+    '/u01/app/oracle/recovery_area/ORCL','/u01/app/oracle/recovery_area/ORCL',
+    '/u02/oradata/ORCL', '/u02/oradata/ORCL'
+SET DB_FILE_NAME_CONVERT 
+    '/u02/oradata/ORCL', '/u02/oradata/ORCL'
+SET LOG_FILE_NAME_CONVERT 
+    '/u02/oradata/ORCL', '/u02/oradata/ORCL'
+USING COMPRESSED BACKUPSET
+SECTION SIZE 1G
+NOFILENAMECHECK;
+}
+END
+
+-- Test the TDE
+o19cs2:ORCL:ORCL:SYS
+SQL> SELECT * FROM test.tde_test;
+
+	ID DATA
+---------- --------------------------------------------------
+	 1 This is a secret!

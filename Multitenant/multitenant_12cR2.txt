@@ -1,0 +1,228 @@
+-- for executing catcon.pl
+export PERL5LIB=$ORACLE_HOME/rdbms/admin:$PERL5LIB
+export PATH=$ORACLE_HOME/bin:$ORACLE_HOME/perl/bin:$PATH
+
+
+CREATE PLUGGABLE DATABASE pdb2
+  ADMIN USER pdbadmin IDENTIFIED BY manager
+  ROLES = (dba)
+  storage unlimited
+  parallel
+  DEFAULT TABLESPACE users DATAFILE '/u02/oradata/cdb1/pdb2/users01.dbf' SIZE 2M AUTOEXTEND ON next 1m
+  FILE_NAME_CONVERT = ('/u02/oradata/cdb1/pdbseed/','/u02/oradata/cdb1/pdb2/')
+  PATH_PREFIX = '/u02/oradata/cdb1/pdb2/';
+
+alter pluggable database pdb2 open read write;
+alter session set container=pdb2;
+
+alter pluggable database pdb2 close;
+drop pluggable database pdb2 including datafiles;
+
+CREATE PLUGGABLE DATABASE pdb3 FROM pdb2
+  FILE_NAME_CONVERT = ('/u02/oradata/cdb1/pdb2/','/u02/oradata/cdb1/pdb3/');
+
+alter pluggable database pdb3 open read write;
+alter session set container=pdb3;
+
+alter pluggable database pdb3 close;
+drop pluggable database pdb3 including datafiles;
+
+exec dbms_pdb.describe('/home/oracle/temp/pdb1.xml','PDB1');
+
+exec dbms_pdb.describe('/home/oracle/temp/pdb2.xml','PDB2');
+
+-- Lockdown Profiles
+create lockdown profile APP_DBA_PROFILE;
+alter lockdown profile APP_DBA_PROFILE disable option=('Partitioning');
+alter session set container=pdb1;
+alter system set pdb_lockdown=APP_DBA_PROFILE;
+SELECT * FROM dba_lockdown_profiles;
+
+alter lockdown profile APP_DBA_PROFILE disable option ALL;
+alter lockdown profile APP_DBA_PROFILE disable option ALL except=('Oracle Data Guard');
+
+alter lockdown profile APP_DBA_PROFILE disable statement=('ALTER SYSTEM') clause ALL except=('KILL SESSION');
+drop lockdown profile APP_DBA_PROFILE;
+
+--- FROM CDB$ROOT
+create restore point before_release guarantee flashback database;
+alter pluggable database pdb1 close;
+flashback pluggable database pdb1 to restore point before_release;
+alter pluggable database pdb1 open resetlogs;
+drop restore point before_release;
+
+-- with XML
+alter pluggable database pdb2 close;
+alter pluggable database pdb2 unplug into '/home/oracle/temp/pdb2.xml';
+drop pluggable database pdb2;
+-- the datafiles remains in place
+create pluggable database pdb2 using '/home/oracle/temp/pdb2.xml' nocopy;
+alter pluggable database pdb2 open read write;
+
+-- with PDB archive
+alter pluggable database pdb2 close;
+alter pluggable database pdb2 unplug into '/home/oracle/temp/pdb2.pdb';
+
+drop pluggable database pdb2 including datafiles;
+create pluggable database pdb2 as clone 
+using '/home/oracle/temp/pdb2.pdb' 
+file_name_convert=('/home/oracle/temp','/u02/oradata/cdb1/pdb2')
+tempfile reuse
+parallel 
+;
+
+-- snapshot copy : only with ASM and Direct NFS
+create pluggable database pdb3 FROM pdb2 snapshot copy;
+
+-- by database link
+-- on the destination cdb:
+
+create public database link mydblink connect to system identified by manager using 'cdb1_source';
+create pluggable database pdb2 FROM pdb2@mydblink 
+FILE_NAME_CONVERT = ('/u02/oradata/cdb1/pdb2/','/u02/oradata/cdb1/pdb2/')
+tempfile reuse
+parallel
+;
+
+
+-- refreshable copy
+create public database link mydblink connect to system identified by manager using 'cdb1_source';
+create pluggable database pdb2 FROM pdb2@mydblink FILE_NAME_CONVERT = ('/u02/oradata/cdb1/pdb2/','/u02/oradata/cdb1/pdb2/') refresh mode manual;
+alter pluggable database pdb2 open read only;
+alter session set container=pdb2;
+alter pluggable database pdb2 close;
+alter pluggable database pdb2 refresh;
+
+
+-- relocating PDB
+-- on the source:
+CREATE USER c##remote_clone_user IDENTIFIED BY remote_clone_user CONTAINER=ALL;
+GRANT CREATE SESSION, SYSOPER, CREATE PLUGGABLE DATABASE TO c##remote_clone_user CONTAINER=ALL;
+
+-- on the destination CDB
+drop public database link mydblink;
+CREATE PUBLIC DATABASE LINK mydblink CONNECT TO c##remote_clone_user IDENTIFIED BY remote_clone_user USING 'cdb1_source';
+
+create pluggable database pdb2 FROM pdb2@mydblink 
+parallel 
+FILE_NAME_CONVERT = ('/u02/oradata/cdb1/pdb2/','/u02/oradata/cdb1/pdb2/') 
+PATH_PREFIX = '/u02/oradata/cdb1/pdb2/'
+tempfile reuse
+relocate;
+alter pluggable database pdb2 open read write;
+drop public database link mydblink;
+
+-- proxy PDB
+create pluggable database pdbproxy as proxy FROM pdb2@mydblink port=1521 host='o12c';
+drop pluggable database pdbproxy including datafiles;
+
+
+
+create tablespace scott_data datafile '/u02/oradata/cdb1/pdb1/scott_data01.dbf' size 1m autoextend on next 1m;
+create tablespace scott_indx datafile '/u02/oradata/cdb1/pdb1/scott_indx01.dbf' size 1m autoextend on next 1m;
+create tablespace scott_lob  datafile '/u02/oradata/cdb1/pdb1/scott_lob01.dbf'  size 1m autoextend on next 1m;
+
+create tablespace sh_data datafile '/u02/oradata/cdb1/pdb1/sh_data01.dbf' size 1m autoextend on next 1m;
+create tablespace sh_indx datafile '/u02/oradata/cdb1/pdb1/sh_indx01.dbf' size 1m autoextend on next 1m;
+
+create tablespace soe_data datafile '/u02/oradata/cdb1/pdb1/soe_data01.dbf' size 1m autoextend on next 1m;
+create tablespace soe_indx datafile '/u02/oradata/cdb1/pdb1/soe_indx01.dbf' size 1m autoextend on next 1m;
+
+create tablespace tpcc_data datafile '/u02/oradata/cdb1/pdb1/tpcc_data01.dbf' size 1m autoextend on next 1m;
+create tablespace tpcc_indx datafile '/u02/oradata/cdb1/pdb1/tpcc_indx01.dbf' size 1m autoextend on next 1m;
+
+create tablespace tpcds_data datafile '/u02/oradata/cdb1/pdb1/tpcds_data01.dbf' size 1m autoextend on next 1m;
+create tablespace tpcds_indx datafile '/u02/oradata/cdb1/pdb1/tpcds_indx01.dbf' size 1m autoextend on next 1m;
+
+create tablespace tpch_data datafile '/u02/oradata/cdb1/pdb1/tpch_data01.dbf' size 1m autoextend on next 1m;
+create tablespace tpch_indx datafile '/u02/oradata/cdb1/pdb1/tpch_indx01.dbf' size 1m autoextend on next 1m;
+
+create user scott       identified by tiger         default tablespace scott_data       temporary tablespace temp;
+create user sh          identified by sh            default tablespace sh_data          temporary tablespace temp;
+create user soe         identified by soe           default tablespace soe_data         temporary tablespace temp;
+create user tpcc        identified by tpcc          default tablespace tpcc_data        temporary tablespace temp;
+create user tpcdslike   identified by tpcdslike     default tablespace tpcds_data       temporary tablespace temp;
+create user tpch        identified by tpch          default tablespace tpch_data        temporary tablespace temp;
+
+grant connect,resource,unlimited tablespace to scott,sh,soe,tpcc,tpcdslike,tpch;
+grant execute on dbms_lock to tpcdslike,tpcc,soe;
+
+-- get the path of DIRECTORY my_data_pump_dir
+cat <<END > /tmp/get_data_pump_dir.sql
+connect / as sysdba
+set lines 200 pages 0 echo off head off trim off trims off feed off
+alter session set container=pdb1;
+SELECT trim(directory_path) FROM dba_directories WHERE directory_name='MY_DATA_PUMP_DIR';
+exit
+END
+vdir_path=$(${ORACLE_HOME}/bin/sqlplus -L -S /nolog @/tmp/get_data_pump_dir.sql | tr -d '\r' | tr -d ' ' | tr -d '\n')
+rm -f /tmp/get_data_pump_dir.sql
+echo $vdir_path
+
+-- import users bench
+cat <<END > $vdir_path/users_bench_IMP.par
+directory           = my_data_pump_dir
+dumpfile            = users_bench%U.dmp
+logfile             = users_bench_IMP.log
+schemas             = SCOTT,SH,SOE,TPCC,TPCDSLIKE,TPCH
+parallel            = 4
+#transform           = storage:n
+#transform           = segment_attributes:n
+DATA_OPTIONS        = TRUST_EXISTING_TABLE_PARTITIONS
+PARTITION_OPTIONS   = MERGE
+END
+impdp system/manager@pdb1 parfile=$vdir_path/users_bench_IMP.par
+
+alter pluggable database pdb1 close;
+alter pluggable database pdb1 unplug into '/home/oracle/temp/pdb1_users_bench.pdb';
+drop pluggable database pdb1 including datafiles;
+create pluggable database pdb1 as clone using '/home/oracle/temp/pdb1_users_bench.pdb' 
+file_name_convert=('/home/oracle/temp','/u02/oradata/cdb1/pdb1') 
+PATH_PREFIX = '/u02/oradata/cdb1/pdb1/' 
+tempfile reuse
+parallel;
+alter pluggable database pdb1 open read write;
+-- list archive
+unzip -l /home/oracle/temp/pdb1_users_bench.pdb
+-- test archive
+unzip -l /home/oracle/temp/pdb1_users_bench.pdb  
+
+-- isolating a user in a PDB
+create pluggable database pdb2 FROM pdb1
+user_tablespaces=('USERS','SCOTT_DATA','SCOTT_INDX','SCOTT_LOB')
+file_name_convert=('/u02/oradata/cdb1/pdb1','/u02/oradata/cdb1/pdb2') 
+PATH_PREFIX = '/u02/oradata/cdb1/pdb2/' 
+tempfile reuse
+parallel;
+alter pluggable database pdb2 open read write;
+alter session set container=pdb2;
+
+drop user SH cascade;
+drop user SOE cascade;
+drop user TPCC cascade;
+drop user TPCDSLIKE cascade;
+drop user TPCH cascade;
+
+drop tablespace SH_data including contents and datafiles;
+drop tablespace SH_INDX including contents and datafiles;
+drop tablespace SOE_DATA including contents and datafiles;
+drop tablespace SOE_INDX including contents and datafiles;
+drop tablespace TPCC_DATA including contents and datafiles;
+drop tablespace TPCC_INDX including contents and datafiles;
+drop tablespace TPCDS_DATA including contents and datafiles;
+drop tablespace TPCDS_INDX including contents and datafiles;
+drop tablespace TPCH_DATA including contents and datafiles;
+drop tablespace TPCH_INDX including contents and datafiles;
+alter session set container=cdb$root;
+
+alter pluggable database pdb2 close;
+alter pluggable database pdb2 unplug into '/home/oracle/temp/pdb2_scott.pdb';
+drop pluggable database pdb2 including datafiles;
+
+create pluggable database pdb2 as clone using '/home/oracle/temp/pdb2_scott.pdb' 
+file_name_convert=('/home/oracle/temp','/u02/oradata/cdb1/pdb2') 
+PATH_PREFIX = '/u02/oradata/cdb1/pdb2/' 
+tempfile reuse
+parallel;
+alter pluggable database pdb2 open read write;
+

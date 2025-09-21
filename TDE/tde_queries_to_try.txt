@@ -1,0 +1,139 @@
+12c+
+
+1) Wallet information
+
+set pagesize 100
+column wrl_parameter format a50
+column wrl_type heading 'Type' format a10
+column status heading 'Status' format a30
+column fully_backed_up heading 'Backed Up' format a10
+column pdb_name heading 'PDB Name' format a10
+
+break on inst_id skip 1
+SELECT 
+       inst_id
+       ,b.name pdb_name
+       ,wrl_type
+       ,wrl_parameter
+       ,status
+       ,wallet_type
+       ,keystore_mode
+       ,fully_backed_up
+FROM 
+        gv$encryption_wallet a
+       ,v$containers b
+WHERE 
+       a.con_id = b.con_id(+)
+ORDER BY 
+       inst_id
+       ,b.name
+       ,wrl_type
+;
+
+
+
+2) Tablespace information
+set linesize 170
+set pagesize 50
+column pdb_name heading "PDB Name" format a10
+column tablespace_name heading "Tablespace Name" format a15
+column masterkeyid_base64 heading "Master Key ID" format a25
+column encrypted heading "Enc." format a5
+column mkid heading "Key ID" format a35
+column encrypted_key heading "tablespace Encryt key (trunc)" format a30
+break on pdb_name skip 1
+SELECT 
+        pdb_name
+       ,tablespace_name
+       ,encrypted
+       ,utl_raw.cast_to_varchar2( utl_encode.base64_encode('01'||substr(mkeyid,1,4))) || utl_raw.cast_to_varchar2( utl_encode.base64_encode(substr(mkeyid,5,length(mkeyid)))) masterkeyid_base64
+       ,mkid
+       ,encrypted_key
+ FROM (SELECT 
+              t.name tablespace_name
+              ,z.name pdb_name
+              ,t.con_id
+              ,encrypted
+              ,RAWTOHEX(x.mkid) mkeyid
+              ,mkid
+              ,substr(encryptedkey,1,30) encrypted_key
+        FROM 
+               v$tablespace t
+              ,sys.x$kcbtek x
+              ,v$containers z
+              ,cdb_tablespaces q 
+        WHERE 
+              t.ts#=x.ts# 
+              and t.con_id=x.con_id 
+              and t.con_id=z.con_id
+              and t.con_id = q.con_id
+              and t.name = q.tablespace_name
+       )
+ORDER BY 
+        pdb_name
+       ,encrypted
+       ,tablespace_name
+;
+
+
+3) Wallet Contents
+set linesize 170
+set pagesize 50
+column pdb_name heading "PDB Name" format a15
+column tag heading "Tag" format a20
+column Creation_time heading "Key Creation Time" format a18
+column key_id heading "Master Key ID" format a55
+column activation_time heading "Key Act. Time" format a18
+column origin heading "Origin" format a10
+column mkid heading "Key ID" format a35
+
+SELECT 
+        substr(key_id,1,999) key_id
+       ,tag
+       ,decode(b.name,null,'CDB',b.name) pdb_name
+       ,keystore_type
+       ,origin
+       ,to_char(a.creation_time,'mm/dd/yyyy hh24:mi') creation_time
+       ,to_char(activation_time,'mm/dd/yyyy hh24:mi') activation_time
+FROM 
+        v$encryption_keys a
+       ,v$containers b
+WHERE 
+       a.con_id=b.con_id(+)
+ORDER BY 
+        creation_time
+       ,pdb_name
+;
+
+
+4) Control file Contents
+set linesize 170;
+
+
+set linesize 170
+set pagesize 50
+column pdb_name heading "PDB Name" format a15
+column masterkeyid_base64 heading "Master Key ID" format a25
+column mkid heading "Key ID" format a35
+break
+
+SELECT 
+        name pdb_name
+       ,mkid
+       ,utl_raw.cast_to_varchar2( utl_encode.base64_encode('01'||substr(mkeyid,1,4))) || utl_raw.cast_to_varchar2( utl_encode.base64_encode(substr(mkeyid,5,length(mkeyid)))) masterkeyid_base64 
+       ,mkloc
+FROM (SELECT 
+               con_id
+              ,mkid
+              ,RAWTOHEX(mkid) mkeyid
+              ,mkloc 
+       FROM 
+              sys.x$kcbdbk
+       ) a
+       ,v$containers b
+WHERE 
+       a.con_id=b.con_id
+;
+
+
+

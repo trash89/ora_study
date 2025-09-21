@@ -1,0 +1,320 @@
+# in .bash_profile : Oracle GoldenGate
+
+export OGG_HOME=/u01/app/oracle/product/gg
+export PATH=$OGG_HOME/bin:$PATH
+export LD_LIBRARY_PATH=$OGG_HOME/lib:$LD_LIBRARY_PATH
+
+
+mkdir -p /home/oracle/tns_admin
+
+./oggca.sh
+Service Manager Administrator
+Deployment Home: /home/oracle/depl1
+Register as a service/system daemon
+Hostname/IP Address : 192.168.1.104   Port: 5001
+Unix user : ggadm/s***
+Uncheck : Enable Strong Password Policy
+
+
+User deployment:
+Deployment Name : udepl1
+DeplymentHome: /home/oracle/udepl1
+Admin Service: 5002
+Data Store Type : BDB
+Data Store Home: /home/oracle/udepl1/DS
+
+TNS_ADMIN: /home/oracle/tns_admin
+Replication schema:ggadmin
+Administrator account for deployment: Same as service manager administrator credential(ggadm/s***)
+
+sqlplus / as sysdba  <<END
+startup mount;
+alter system set enable_goldengate_replication=true scope=both;
+ALTER SYSTEM SET STREAMS_POOL_SIZE = 1G scope=both;
+create pfile FROM spfile;
+shutdown immediate;
+END
+/home/oracle/scripts/cleanup.sh
+
+-- in cdb
+rem create tablespace gg_data datafile '/u02/oradata/CDB1/gg_data01.dbf' size 1m autoextend on next 1m;
+CREATE USER c##ggadmin IDENTIFIED BY manager CONTAINER=all DEFAULT TABLESPACE users TEMPORARY TABLESPACE temp;
+GRANT RESOURCE to c##ggadmin;
+GRANT CREATE SESSION to c##ggadmin;
+GRANT CREATE VIEW to c##ggadmin;
+GRANT CREATE TABLE to c##ggadmin;
+GRANT CONNECT to c##ggadmin CONTAINER=all;
+rem GRANT DV_GOLDENGATE_ADMIN; –-- for data vault user
+rem GRANT DV_GOLDENGATE_REDO_ACCESS; –-- for data vault user
+GRANT ALTER SYSTEM to c##ggadmin;
+GRANT ALTER USER to c##ggadmin;
+ALTER USER c##ggadmin SET CONTAINER_DATA=all CONTAINER=current;
+ALTER USER c##ggadmin QUOTA unlimited ON users;
+GRANT SELECT ANY DICTIONARY to c##ggadmin;
+GRANT SELECT ANY TRANSACTION to c##ggadmin;
+EXEC DBMS_GOLDENGATE_AUTH.GRANT_ADMIN_PRIVILEGE('c##ggadmin');
+
+
+-- Configuration
+
+
+-- only in pdb on both servers
+sqlplus / as sysdba << END
+ALTER SESSION SET CONTAINER=pdb1;
+CREATE USER ggadmin IDENTIFIED BY manager CONTAINER=CURRENT;
+GRANT CONNECT, RESOURCE, DBA TO ggadmin CONTAINER=CURRENT;
+GRANT CREATE SESSION TO ggadmin CONTAINER=CURRENT;
+EXEC DBMS_GOLDENGATE_AUTH.GRANT_ADMIN_PRIVILEGE('ggadmin');
+END
+
+-- on the primary server o19cs
+sqlplus / as sysdba << END
+ALTER SESSION SET CONTAINER=pdb1;
+create user scott identified by tiger default tablespace users;
+grant connect,resource,unlimited tablespace to scott;
+@build_scott
+drop MATERIALIZED VIEW LOG ON scott.emp;
+drop MATERIALIZED VIEW scott.emp_mv;
+END
+
+-- on the secondary server o19cs2
+sqlplus / as sysdba << END
+ALTER SESSION SET CONTAINER=pdb1;
+create user scott identified by tiger default tablespace users;
+grant connect,resource,unlimited tablespace to scott;
+@build_scott
+drop MATERIALIZED VIEW LOG ON scott.emp;
+drop MATERIALIZED VIEW scott.emp_mv;
+delete FROM SCOTT.EMP;
+delete FROM SCOTT.DEPT;
+delete FROM SCOTT.BONUS;
+delete FROM SCOTT.SALGRADE;
+delete FROM SCOTT.DUMMY;
+delete FROM SCOTT.TEST_LOB;
+delete FROM SCOTT.COUNTRIES;
+commit;
+END
+
+
+http://o19cs:5001
+
+-- Administration service
+http://o19cs:5002
+
+http://o19cs2:5002
+
+user ggadm/s***
+
+-- on both servers: Add database connections (DB Connections)
+Credential Domain : OracleGoldenGate
+Credential Alias : ggadmin_alias
+User ID : ggadmin@o19cs:1521/pdb1
+User ID : ggadmin@o19cs2:1521/pdb1
+Password : m*n*g*r
+
+Add Heartbeat table,Add Checkpoint Table,Add Trandata : Schema : scott, check all but left uncheck Partial JSON
+-- on o19cs
+adminclient
+connect http://o19cs:5001 deployment udepl1 user ggadm
+dblogin useridalias ggadmin_alias
+ADD HEARTBEATTABLE
+ADD CHECKPOINTTABLE ggadmin.ckpt_table
+ADD TRANDATA SCOTT.*, ALLCOLS
+
+-- on o19cs2
+adminclient
+connect http://o19cs2:5001 deployment udepl1 user ggadm
+dblogin useridalias ggadmin_alias
+ADD HEARTBEATTABLE
+ADD CHECKPOINTTABLE ggadmin.ckpt_table
+ADD TRANDATA SCOTT.*, ALLCOLS
+
+
+-- instantiating with initial load
+adminclient
+connect http://o19cs:5001 deployment udepl1 user ggadm
+
+dblogin useridalias ggadmin_alias
+ADD EXTRACT extprim INTEGRATED TRANLOG BEGIN NOW
+REGISTER EXTRACT extprim DATABASE
+
+OGG-02003  Extract group EXTPRIM successfully registered with database at SCN 3243362.
+
+EDIT PARAMS extprim
+
+VIEW PARAMS extprim
+--------------------------
+Extract EXTPRIM
+UseridAlias ggadmin_alias
+DDL INCLUDE MAPPED
+ExtTrail AA
+Table SCOTT.*;
+----------------------------
+
+ADD EXTTRAIL AA, EXTRACT EXTPRIM
+
+START EXTRACT extprim
+
+set lines 200
+SELECT 
+     T.START_SCN
+    ,T.STATUS TSTATUS
+    ,T.START_DATE
+    ,S.SID
+    ,S.SERIAL#
+    ,S.INST_ID
+    ,S.USERNAME
+    ,S.OSUSER
+    ,S.STATUS SSTATUS
+    ,S.LOGON_TIME
+FROM gv$transaction T
+INNER JOIN gv$session S
+ON s.saddr = t.ses_addr
+UNION ALL
+SELECT 
+     CURRENT_SCN
+    ,'CURRENT'
+    ,CURRENT_DATE
+    ,NULL
+    ,NULL
+    ,NULL
+    ,'SYS'
+    ,NULL
+    ,NULL
+    ,NULL
+FROM v$database
+ORDER BY 1;
+
+3230015
+
+
+SELECT 
+    MIN(SCN) as INSTANTIATION_SCN
+FROM (SELECT 
+        MIN(START_SCN) as SCN
+        FROM gv$transaction
+        UNION ALL
+        SELECT 
+            CURRENT_SCN
+    FROM gv$database
+);
+
+3230125
+
+
+-- on o19cs2
+-- only in pdb is not already done
+sqlplus / as sysdba << END
+ALTER SESSION SET CONTAINER=pdb1;
+CREATE USER ggadmin IDENTIFIED BY manager CONTAINER=CURRENT;
+GRANT CONNECT, RESOURCE, DBA TO ggadmin CONTAINER=CURRENT;
+GRANT CREATE SESSION TO ggadmin CONTAINER=CURRENT;
+EXEC DBMS_GOLDENGATE_AUTH.GRANT_ADMIN_PRIVILEGE('ggadmin');
+END
+
+-- on the secondary server o19cs2
+sqlplus / as sysdba << END
+ALTER SESSION SET CONTAINER=pdb1;
+create user scott identified by tiger default tablespace users;
+grant connect,resource,unlimited tablespace to scott;
+@build_scott
+drop MATERIALIZED VIEW LOG ON scott.emp;
+drop MATERIALIZED VIEW scott.emp_mv;
+delete FROM SCOTT.EMP;
+delete FROM SCOTT.DEPT;
+delete FROM SCOTT.BONUS;
+delete FROM SCOTT.SALGRADE;
+delete FROM SCOTT.DUMMY;
+delete FROM SCOTT.TEST_LOB;
+delete FROM SCOTT.COUNTRIES;
+commit;
+END
+
+-- admin
+http://o19cs2:5002
+
+user ggadm/s**
+
+Add DB connections
+Add database connections (DB Connections)
+Credential Domain : OracleGoldenGate
+Credential Alias : ggadmin_alias
+User ID : ggadmin@o19cs2:1521/pdb1
+Password :
+
+-- on o19cs2
+adminclient
+connect http://o19cs2:5001 deployment udepl1 user ggadm
+dblogin useridalias ggadmin_alias
+ADD HEARTBEATTABLE
+ADD CHECKPOINTTABLE ggadmin.ckpt_table
+ADD TRANDATA SCOTT.*, ALLCOLS
+
+adminclient
+connect http://o19cs2:5001 deployment udepl1 user ggadm
+
+DBLOGIN USERIDALIAS ggadmin_alias
+
+ADD REPLICAT repinit EXTTRAIL dd CHECKPOINTTABLE ggadmin.ckpt_table
+
+EDIT PARAMS repinit
+
+VIEW PARAMS repinit
+-----------------------------
+Replicat REPINIT
+UseridAlias ggadmin_alias
+Map SCOTT.*
+  Target SCOTT.*;
+-----------------------------
+
+START REPLICAT repinit
+
+
+
+
+adminclient
+connect http://o19cs:5001 deployment udepl1 user ggadm
+
+ADD EXTRACT extinit SOURCEISTABLE
+
+EDIT PARAMS extinit
+
+view params extinit
+--------------------------------
+Extract EXTINIT
+UseridAlias ggadmin_alias
+ExtFile CC Megabytes 2000 Purge
+Table SCOTT.*, SQLPredicate "As Of SCN 3146896";
+--------------------------------
+
+start extract extinit
+
+ADD DISTPATH aabb SOURCE trail://o19cs:5003/services/v2/sources?trail=AA target ogg://o19cs2:5004/services/v2/targets?trail=bb
+START DISTPATH aabb
+
+ADD DISTPATH ccdd SOURCE trail://o19cs:5003/services/v2/sources?trail=CC target ogg://o19cs2:5004/services/v2/targets?trail=dd
+START DISTPATH ccdd
+
+
+
+
+adminclient
+connect http://o19cs2:5001 deployment udepl1 user ggadm
+
+ADD REPLICAT repprim EXTTRAIL bb CHECKPOINTTABLE ggadmin.ckpt_table
+
+EDIT PARAMS repprim
+
+VIEW PARAMS repprim
+-----------------------------
+Replicat REPPRIM
+USERIDALIAS ggadmin_alias
+DDL INCLUDE all
+DDLERROR default discard
+REPERROR (default,discard)
+DDLOPTIONS REPORT
+Map SCOTT.*
+Target SCOTT.*;
+-----------------------------
+
+START REPLICAT repprim ATCSN 3274822

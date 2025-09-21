@@ -1,0 +1,25 @@
+-- OFFLINE move with SQL
+
+SQL> SELECT name FROM v$datafile WHERE name LIKE '%users01%';
+
+NAME
+--------------------------------------------------------------------------------
+/u01/app/oracle/oradata/cdb1/users01.dbf
+
+SQL>
+
+ALTER TABLESPACE users OFFLINE NORMAL;
+
+HOST mv /u01/app/oracle/oradata/cdb1/users01.dbf /u01/app/oracle/oradata/cdb1/users02.dbf
+
+ALTER TABLESPACE users RENAME DATAFILE '/u01/app/oracle/oradata/cdb1/users01.dbf' TO '/u01/app/oracle/oradata/cdb1/users02.dbf';
+
+ALTER TABLESPACE users ONLINE;
+
+SQL> SELECT name FROM v$datafile WHERE name LIKE '%users02%';
+
+NAME
+--------------------------------------------------------------------------------
+/u01/app/oracle/oradata/cdb1/users02.dbf
+
+SQL>

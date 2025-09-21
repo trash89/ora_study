@@ -1,0 +1,420 @@
+-- on source server (o12c)
+-- create SOE user and schema using oewizard from swingbench
+
+-- activate the constraints that are not validated, especially the PK constraints
+SQL> @constr_not_valid
+Owner?(%)      : SOE
+
+dba_constraints
+Constraint Name 	             C Table				                  Search Cond.						                                Status	 Deferrable	    Deferred  Validated	    Generated      Bad Rely Invalid
+------------------------------ - ------------------------------ ------------------------------------------------------- -------- -------------- --------- ------------- -------------- --- ---- -------
+ADDRESS_PK		                 P ADDRESSES                                                                              ENABLED  NOT DEFERRABLE IMMEDIATE NOT VALIDATED USER NAME
+ADD_CUST_FK		                 R ADDRESSES										                                                          ENABLED  DEFERRABLE	    IMMEDIATE NOT VALIDATED USER NAME
+CARD_DETAILS_PK 	             P CARD_DETAILS										                                                        ENABLED  NOT DEFERRABLE IMMEDIATE NOT VALIDATED USER NAME
+CUSTOMERS_PK		               P CUSTOMERS										                                                          ENABLED  NOT DEFERRABLE IMMEDIATE NOT VALIDATED USER NAME
+CUSTOMER_CREDIT_LIMIT_MAX      C CUSTOMERS			                 credit_limit <= 50000					                        ENABLED  DEFERRABLE	    IMMEDIATE NOT VALIDATED USER NAME
+CUSTOMER_ID_MIN 	             C CUSTOMERS			                 customer_id > 0 					                              ENABLED  DEFERRABLE	    IMMEDIATE NOT VALIDATED USER NAME
+INVENTORIES_PRODUCT_ID_FK      R INVENTORIES										                                                        ENABLED  NOT DEFERRABLE IMMEDIATE NOT VALIDATED USER NAME
+INVENTORIES_WAREHOUSES_FK      R INVENTORIES										                                                        ENABLED  NOT DEFERRABLE IMMEDIATE NOT VALIDATED USER NAME
+INVENTORY_PK		               P INVENTORIES										                                                        ENABLED  NOT DEFERRABLE IMMEDIATE NOT VALIDATED USER NAME
+ORDERS_CUSTOMER_ID_FK	         R ORDERS 										                                                            ENABLED  NOT DEFERRABLE IMMEDIATE NOT VALIDATED USER NAME
+ORDER_MODE_LOV		             C ORDERS 			                   order_mode in ('direct','online')			                ENABLED  DEFERRABLE	    IMMEDIATE NOT VALIDATED USER NAME
+ORDER_PK		                   P ORDERS 										                                                            ENABLED  NOT DEFERRABLE IMMEDIATE NOT VALIDATED USER NAME
+ORDER_TOTAL_MIN 	             C ORDERS 			                   order_total >= 0					                              ENABLED  DEFERRABLE	    IMMEDIATE NOT VALIDATED USER NAME
+ORDER_ITEMS_ORDER_ID_FK        R ORDER_ITEMS										                                                        ENABLED  NOT DEFERRABLE IMMEDIATE NOT VALIDATED USER NAME
+ORDER_ITEMS_PK		             P ORDER_ITEMS										                                                        ENABLED  NOT DEFERRABLE IMMEDIATE NOT VALIDATED USER NAME
+ORDER_ITEMS_PRODUCT_ID_FK      R ORDER_ITEMS										                                                        ENABLED  NOT DEFERRABLE IMMEDIATE NOT VALIDATED USER NAME
+PRODUCT_DESCRIPTIONS_PK        P PRODUCT_DESCRIPTIONS									                                                  ENABLED  NOT DEFERRABLE IMMEDIATE NOT VALIDATED USER NAME
+WAREHOUSES_PK		               P WAREHOUSES										                                                          ENABLED  NOT DEFERRABLE IMMEDIATE NOT VALIDATED USER NAME
+
+-- validate the PK constraints
+alter table soe.ADDRESSES enable validate constraint ADDRESS_PK;
+alter table soe.CARD_DETAILS enable validate constraint CARD_DETAILS_PK;
+alter table soe.CUSTOMERS enable validate constraint CUSTOMERS_PK;
+alter table soe.INVENTORIES enable validate constraint INVENTORY_PK;
+alter table soe.ORDERS enable validate constraint ORDER_PK;
+alter table soe.ORDER_ITEMS enable validate constraint ORDER_ITEMS_PK;
+alter table soe.PRODUCT_DESCRIPTIONS enable validate constraint PRODUCT_DESCRIPTIONS_PK;
+alter table soe.WAREHOUSES enable validate constraint WAREHOUSES_PK;
+
+-- validate other constraints
+alter table soe.ADDRESSES enable validate constraint  ADD_CUST_FK;
+-- alter table soe.CUSTOMERS enable validate constraint CUSTOMER_CREDIT_LIMIT_MAX;
+alter table soe.CUSTOMERS enable validate constraint CUSTOMER_ID_MIN;
+alter table soe.INVENTORIES enable validate constraint INVENTORIES_PRODUCT_ID_FK;
+alter table soe.INVENTORIES enable validate constraint INVENTORIES_WAREHOUSES_FK;
+alter table soe.ORDERS enable validate constraint ORDERS_CUSTOMER_ID_FK;
+alter table soe.ORDERS enable validate constraint ORDER_MODE_LOV;
+alter table soe.ORDERS enable validate constraint ORDER_TOTAL_MIN;
+alter table soe.ORDER_ITEMS enable validate constraint ORDER_ITEMS_ORDER_ID_FK;
+alter table soe.ORDER_ITEMS enable validate constraint ORDER_ITEMS_PRODUCT_ID_FK;
+
+
+-- on source server (o12c)
+
+-- delete old ggs_owner user
+cd /u01/app/oracle/product/gg23/lib/sql/legacy
+sqlplus / as sysdba
+SQL> @ddl_remove
+Enter Oracle GoldenGate schema name:GGS_OWNER
+SQL> @marker_remove
+Enter Oracle GoldenGate schema name:GGS_OWNER
+SQL> @remove_seq.sql   
+Please enter the name of a schema for the GoldenGate database objects:
+GGS_OWNER
+Setting schema name to GGS_OWNER
+SQL> drop user ggs_owner cascade;
+
+User dropped.
+
+-- configure the init.ora parameters for GoldenGate
+sqlplus / as sysdba  <<END
+startup;
+alter system set enable_goldengate_replication=true scope=both;
+ALTER SYSTEM SET STREAMS_POOL_SIZE=1G scope=both;
+alter database force logging;
+alter database add supplemental log data (primary key,unique,foreign key,all) columns;
+create pfile FROM spfile;
+END
+
+
+-- create gg_data tablespace and ggs_owner user
+sqlplus / as sysdba << END
+create tablespace gg_data datafile '/u02/oradata/ORCL/gg_data01.dbf' size 1m autoextend on next 1m;
+CREATE USER ggs_owner IDENTIFIED BY ggs_owner default tablespace gg_data temporary tablespace temp;
+GRANT CONNECT,RESOURCE,DBA  TO ggs_owner;
+GRANT CREATE SESSION        TO ggs_owner;
+EXEC DBMS_GOLDENGATE_AUTH.GRANT_ADMIN_PRIVILEGE('ggs_owner');
+EXEC DBMS_STREAMS_AUTH.GRANT_ADMIN_PRIVILEGE('ggs_owner');
+GRANT FLASHBACK ANY TABLE TO ggs_owner;
+END
+
+-- Set a sufficient amount of redo retention by setting the Oracle initialization parameters UNDO_MANAGEMENT and UNDO_RETENTION as follows (in seconds).
+
+UNDO_MANAGEMENT=AUTO
+UNDO_RETENTION=86400 
+-- UNDO_RETENTION can be adjusted upward in high-volume environments.
+
+
+cd /u01/app/oracle/product/gg23/lib/sql/legacy
+sqlplus / as sysdba
+
+@role_setup
+Enter GoldenGate schema name:GGS_OWNER
+
+grant ggs_ggsuser_role to ggs_owner;
+
+@sequence 
+Please enter the name of a schema for the GoldenGate database objects:
+GGS_OWNER
+Setting schema name to GGS_OWNER
+
+ALTER TABLE sys.seq$ ADD SUPPLEMENTAL LOG DATA (PRIMARY KEY) COLUMNS;
+
+exit
+
+
+
+-- on target server (o19cs)
+
+sqlplus / as sysdba  <<END
+startup;
+alter system set enable_goldengate_replication=true scope=both;
+ALTER SYSTEM SET STREAMS_POOL_SIZE=1G scope=both;
+alter database force logging;
+alter database add supplemental log data (primary key,unique,foreign key,all) columns;
+create pfile FROM spfile;
+END
+
+-- create gg_data tablespace and ggs_owner user
+sqlplus / as sysdba << END
+create tablespace gg_data datafile '/u02/oradata/ORCL/gg_data01.dbf' size 1m autoextend on next 1m;
+CREATE USER ggs_owner IDENTIFIED BY ggs_owner default tablespace gg_data temporary tablespace temp;
+GRANT CONNECT,RESOURCE,DBA  TO ggs_owner;
+GRANT CREATE SESSION        TO ggs_owner;
+EXEC DBMS_GOLDENGATE_AUTH.GRANT_ADMIN_PRIVILEGE('ggs_owner');
+EXEC DBMS_STREAMS_AUTH.GRANT_ADMIN_PRIVILEGE('ggs_owner');
+GRANT FLASHBACK ANY TABLE TO ggs_owner;
+END
+
+cd /u01/app/oracle/product/gg23/lib/sql/legacy
+sqlplus / as sysdba
+
+@role_setup
+Enter GoldenGate schema name:GGS_OWNER
+
+grant ggs_ggsuser_role to ggs_owner;
+
+@sequence 
+Please enter the name of a schema for the GoldenGate database objects:
+GGS_OWNER
+Setting schema name to GGS_OWNER
+
+ALTER TABLE sys.seq$ ADD SUPPLEMENTAL LOG DATA (PRIMARY KEY) COLUMNS;
+
+exit
+
+
+
+-- creating tablespace soe_data
+sqlplus / as sysdba << END
+create tablespace SOE datafile '/u02/oradata/ORCL/soe_data01.dbf' size 1m autoextend on next 1m;
+END
+
+adminclient
+
+connect http://o19cs:5001 as ggma
+start deployment udepl1
+connect http://o19cs:5001 as ggma
+
+INFO CREDENTIALSTORE
+
+-- delete the old alias
+alter credentialstore delete user ggs_owner_alias
+
+-- add the alias to the source database
+alter credentialstore add user ggs_owner@o12c:1521/ORCL password ggs_owner alias ggs_owner_alias12c
+
+-- add the alias to the target database
+alter credentialstore add user ggs_owner@o19cs:1521/ORCL password ggs_owner alias ggs_owner_alias
+
+-- create the checkpoint and heartbeattable in the source database
+-- normally is not necessary, but in the case we want to reverse the extract and replicat to keep in sync the old source db with the new target
+dblogin useridalias ggs_owner_alias12c
+add checkpointtable GGS_OWNER.CHKPTAB
+add heartbeattable
+
+-- create the checkpoint and heartbeattable in the target database
+dblogin useridalias ggs_owner_alias
+add checkpointtable GGS_OWNER.CHKPTAB
+add heartbeattable
+
+
+OGG (http://o19cs:5001 udepl1) 8> INFO CREDENTIALSTORE
+
+Default domain: OracleGoldenGate
+
+  Alias: ggs_owner_alias12c
+  Userid: ggs_owner@o12c:1521/ORCL
+
+  Alias: ggs_owner_alias
+  Userid: ggs_owner@o19cs:1521/ORCL
+
+-- add schematrandata 
+dblogin useridalias ggs_owner_alias12c
+ADD SCHEMATRANDATA SOE ALLCOLS PREPARECSN NOWAIT
+ADD TRANDATA SOE.* ALLCOLS PREPARECSN NOWAIT
+
+-- Create the Extract process
+dblogin useridalias ggs_owner_alias12c
+ADD EXTRACT ext1 INTEGRATED TRANLOG, BEGIN NOW
+
+-- Enable additional logging at the table level
+-- ADD TRANDATA SOE.* ALLCOLS PREPARECSN NOWAIT
+-- If possible, use the ADD SCHEMATRANDATA command rather than the ADD TRANDATA command. 
+-- The ADD SCHEMATRANDATA command ensures replication continuity should DML occur on an object for which DDL has just been performed. 
+-- You can exclude objects from the schema specification by using the exclusion parameters.
+-- To use the Oracle GoldenGate DDL replication feature, you must use the ADD SCHEMATRANDATA command to log the required supplemental data.
+-- When using ADD SCHEMATRANDATA, you can use ADD TRANDATA with the COLS option to log any non-key columns, 
+-- such as those needed for FILTER statements and KEYCOLS clauses in the TABLE and MAP parameters.
+
+-- register the extract with the source database to see the SCN
+register extract ext1 database
+
+-- OGG (http://o19cs:5001 udepl1 as ggs_owner_alias12c@ORCL) 22> register extract ext1 database
+-- 2025-05-06T06:48:53Z  INFO    OGG-02003  Extract group EXT1 successfully registered with database at SCN 1475093.
+
+
+-- Create the parameter file for the extract group with DDL INCLUDE ALL
+EDIT PARAMS ext1
+
+EXTRACT ext1
+useridalias ggs_owner_alias12c
+LOGALLSUPCOLS
+UPDATERECORDFORMAT COMPACT
+TRANLOGOPTIONS ENABLE_AUTO_CAPTURE INTEGRATEDPARAMS (MAX_SGA_SIZE 100)
+EXTTRAIL lt
+DDL INCLUDE all
+DDLOPTIONS REPORT
+TABLE SOE.*;
+SEQUENCE SOE.*;
+
+-- add the exttrail
+ADD EXTTRAIL lt, EXTRACT ext1
+
+start extract ext1
+info extract ext1
+view report ext1
+
+-- on source server (o12c)
+
+--  perform the database export 
+-- get the path of DIRECTORY data_pump_dir
+cat <<END > /tmp/get_data_pump_dir.sql
+connect / as sysdba
+set lines 200 pages 0 echo off head off trim off trims off feed off
+SELECT trim(directory_path) FROM dba_directories WHERE directory_name='DATA_PUMP_DIR';
+exit
+END
+vdir_path=$(${ORACLE_HOME}/bin/sqlplus -L -S /nolog @/tmp/get_data_pump_dir.sql | tr -d '\r' | tr -d ' ' | tr -d '\n')
+rm -f /tmp/get_data_pump_dir.sql
+echo $vdir_path
+
+-- export the SOE user, note the parallel 2 to the parameters
+-- not necessary to include flashback_scn if integrated extract with DBOPTIONS ENABLE_INSTANTIATION_FILTERING in replicat
+cat <<END > $vdir_path/users_SOE_EXP.par
+directory       =   data_pump_dir
+dumpfile        =   users_SOE%U.dmp
+logfile         =   users_SOE_EXP.log
+schemas         =   SOE
+parallel        =   2
+filesize        =   2G
+exclude         =   statistics
+#FLASHBACK_SCN   =   1475093
+END
+expdp system/manager parfile=$vdir_path/users_SOE_EXP.par
+
+-- transfer the dump to target server o19cs 
+scp /u01/app/oracle/admin/ORCL/dpdump/users_SOE01.dmp o19cs:/u01/app/oracle/admin/ORCL/dpdump/users_SOE01.dmp
+scp /u01/app/oracle/admin/ORCL/dpdump/users_SOE02.dmp o19cs:/u01/app/oracle/admin/ORCL/dpdump/users_SOE02.dmp
+
+
+
+-- on target server (o19cs)
+
+
+-- perform the import
+-- get the path of DIRECTORY data_pump_dir
+cat <<END > /tmp/get_data_pump_dir.sql
+connect / as sysdba
+set lines 200 pages 0 echo off head off trim off trims off feed off
+SELECT trim(directory_path) FROM dba_directories WHERE directory_name='DATA_PUMP_DIR';
+exit
+END
+vdir_path=$(${ORACLE_HOME}/bin/sqlplus -L -S /nolog @/tmp/get_data_pump_dir.sql | tr -d '\r' | tr -d ' ' | tr -d '\n')
+rm -f /tmp/get_data_pump_dir.sql
+echo $vdir_path
+
+-- import the users
+cat <<END > $vdir_path/users_SOE_IMP.par
+directory       = data_pump_dir
+dumpfile        = users_SOE%U.dmp
+logfile         = users_SOE_IMP.log
+#transform       = storage:n
+#transform       = segment_attributes:n
+schemas         = SOE
+parallel        = 2
+END
+impdp system/manager parfile=$vdir_path/users_SOE_IMP.par
+
+-- if ORA-39082: Object type PACKAGE BODY:"SOE"."ORDERENTRY" created with compilation warnings
+sqlplus / as sysdba <<END
+alter package soe.orderentry compile;
+alter package soe.orderentry compile body;
+END
+
+-- on target server (o19cs)
+
+adminclient
+connect http://o19cs:5001 as ggma
+
+
+
+-- Create the parallel integrated Replicat group
+dblogin useridalias ggs_owner_alias
+ADD REPLICAT rep1, parallel, integrated, EXTTRAIL rt checkpointtable GGS_OWNER.CHKPTAB
+
+-- Create the parameter file for the Replicat group
+EDIT PARAMS rep1
+
+REPLICAT rep1
+USERIDALIAS ggs_owner_alias
+ASSUMETARGETDEFS
+DBOPTIONS ENABLE_INSTANTIATION_FILTERING
+DDL INCLUDE MAPPED
+DDLERROR default discard
+REPERROR (default,discard)
+DDLOPTIONS REPORT
+ALLOWNOOPUPDATES
+APPLYNOOPUPDATES
+HANDLECOLLISIONS
+MAP_PARALLELISM 2
+SPLIT_TRANS_RECS 10000
+MAP SOE.*, TARGET SOE.*;
+
+
+-- determine the instantiation SCN -- connect and run against the source database
+sqlplus system/manager@o12c:1521/orcl <<END
+SELECT MIN(SCN) as INSTANTIATION_SCN
+  FROM (SELECT MIN(START_SCN) as SCN 
+        FROM gv\$transaction 
+        UNION ALL 
+        SELECT CURRENT_SCN FROM gv\$database
+      );
+END
+
+-- start the replicat at the SCN returned by the query
+start replicat rep1 ATCSN 1603550
+info replicat rep1
+view report rep1
+
+-- add alias for the Network domain to be used by the distpath
+alter credentialstore add user ggma alias ggma_alias domain Network password slayer
+
+ADD DISTPATH ltrt SOURCE trail://o19cs:5003/services/v2/sources?trail=lt target ws://o19cs:5004/services/v2/targets?trail=rt authentication useridalias ggma_alias domain Network
+start distpath ltrt
+info distpath ltrt
+
+
+-- stopping and deleting
+
+DBLOGIN useridalias ggs_owner_alias12c
+stop extract ext1
+delete extract ext1
+PURGE EXTTRAIL lt
+
+DBLOGIN useridalias ggs_owner_alias
+stop replicat rep1
+delete replicat rep1
+
+stop distpath ltrt
+delete distpath ltrt
+
+
+-- Determine the Instantiation SCN
+-- The Administration Service in Oracle GoldenGate Microservices Architecture, provides an endpoint for retrieving information about open database transactions. 
+-- This information can be used to identify the SCN to use when instantiating the initial load Extract.
+-- In the following example, the instantiation SCN is 1609723, which is the oldest SCN of all open transactions that is also past the registration SCN of 1608891, identified in the previous step.
+
+-- Query for active transactions
+SELECT T.START_SCN, T.STATUS TSTATUS, T.START_DATE, S.SID, S.SERIAL#, S.INST_ID, S.USERNAME, S.OSUSER, S.STATUS SSTATUS, S.LOGON_TIME
+FROM gv$transaction T
+INNER JOIN gv$session S
+ON s.saddr = t.ses_addr
+UNION ALL
+-- Query for current status
+SELECT CURRENT_SCN, 'CURRENT', CURRENT_DATE, NULL, NULL, NULL, 'SYS', NULL, NULL, NULL
+FROM v$database
+ORDER BY 1;
+
+-- The results of this query can be used to determine the instantiation SCN. The results for this specific query are:
+-- 1538916 ACTIVE 2018-03-16 18:10:31.0 3865 9176 1 OGGADMIN oracle INACTIVE 2018-03-16 18:10:26.0 1540555 CURRENT 2018-03-16 18:21:50.0 SYS
+
+-- The SCN used to instantiate the initial load Extract is obtained using SQL*Plus. In the following example, the SQL query uses the instantiation SCN value as 1624963, 
+-- which is the oldest SCN of all open transactions that are also past the registration SCN of 1608891.
+
+OGG (https://oggdep.example.com:9100 OGGDEP as oggadmin) 14> SHELL ECHO 'SELECT MIN(START_SCN) FROM gv$transaction;' | ${ORACLE_HOME}/bin/sqlplus -S / as sysdba
+ 
+MIN(START_SCN)
+--------------
+       1624963
+-- If there are no open transactions, then this SQL query returns an empty result. A detailed query that takes into account the situation where there are no open transactions is:
+
+
+SELECT MIN(SCN) as INSTANTIATION_SCN
+  FROM (SELECT MIN(START_SCN) as SCN 
+        FROM gv$transaction 
+        UNION ALL 
+        SELECT CURRENT_SCN FROM gv$database
+      );
+

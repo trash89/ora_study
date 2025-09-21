@@ -1,0 +1,8 @@
+Supported Upgrade Paths
+Direct upgrades are possible FROM existing databases with the following versions.
+
+Source                                              Destination                
+======                                              ===========                
+10.2.0.5+, 11.1.0.7+, 11.2.0.2+ or 12.1.0.1         12c Release 1 (12.1.0.2)   
+11.2.0.3+ or 12.1.0.1 or 12.1.0.2                   12c Release 2 (12.2.0.1)   
+11.2.0.4, 12.1.0.2, 12.2.0.1, 18                    19c

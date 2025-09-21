@@ -1,0 +1,47 @@
+SELECT do.owner,
+       do.object_name,
+       dbms_rowid.rowid_create ( rowid_type=> 1,
+                                 object_number=> do.data_object_id,
+                                 relative_fno=> v.rfile#,
+                                 block_number=> s.row_wait_block#,
+                                 row_number=> s.row_wait_row# )
+  FROM gv$session s,
+       dba_objects do,
+       v$datafile v
+ WHERE s.event = 'enq: TX - row lock contention'
+   AND s.row_wait_obj# = do.object_id
+   AND s.row_wait_file# = v.file#;
+
+OWNER	   OBJECT_NAME	   DBMS_ROWID.ROWID_C
+---------- --------------- ------------------
+SCOTT	   EMP             AAASYGAAOAAAACFAAA
+
+
+SELECT DISTINCT do.owner, do.object_name,
+       dbms_rowid.rowid_create ( rowid_type=> 1,
+                                 object_number=> do.data_object_id,
+                                 relative_fno=> v.rfile#,
+                                 block_number=> s.current_block#,
+                                 row_number=> s.current_row# )
+  FROM dba_hist_active_sess_history s,
+       dba_objects do,
+       v$datafile v
+ WHERE sample_time >= TO_DATE('18/11/2024 10:01','dd/mm/yyyy hh24:mi')
+   and sample_time <= TO_DATE('18/11/2024 10:02','dd/mm/yyyy hh24:mi')
+   and event = 'enq: TX - row lock contention'
+   AND s.current_obj# = do.object_id
+   AND s.current_file# = v.file#;
+
+OWNER	   OBJECT_NAME	   DBMS_ROWID.ROWID_C
+---------- --------------- ------------------
+SCOTT	   EMP             AAASYGAAOAAAACFAAA
+
+
+
+SELECT * 
+  FROM scott.emp 
+ WHERE rowid = 'AAASYGAAOAAAACFAAA';
+ 
+  EMPNO ENAME     SAL
+ ------ ------ ------
+   7782 CLARK    2450

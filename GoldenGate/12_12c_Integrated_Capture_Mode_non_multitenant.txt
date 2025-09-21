@@ -1,0 +1,184 @@
+https://gavinsoorma.com.au/knowledge-base/goldengate-integrated-capture-mode/
+
+GoldenGate Integrated Capture Mode
+One of the new features in GoldenGate 11g is the Integrated Capture mode.
+
+In the earlier classic capture mode, the Oracle GoldenGate Extract process captures data changes FROM the Oracle redo or archive log files on the source system.
+In integrated capture mode, the Oracle GoldenGate Extract process interacts directly with the database log mining server which mines or reads the database redo log files
+and captures the changes in the form of Logical Change Records (LCR’s) which are FROM there written to the GoldenGate trail files.
+
+The basic difference is that in the Integrated Capture mode, the extract process does not directly read the redo log files. 
+That part of the job is done by the logmining server residing in the Oracle database.
+
+Integrated capture supports more data types as well as compressed data and as it is fully integrated with the database there is no additional setup steps 
+required when we are configuring GoldenGate with things like RAC, ASM and TDE (Transparent Data Encryption)
+
+In the integrated capture mode there are two deployment options:
+
+a) Local deployment
+b) Downstream deployment
+
+Basically it depends on WHERE the log mining server is deployed.
+
+In the Local deployment, the source database and the log mining server are the same database.
+
+In downstream deployment, the source and log mining databases are different databases. 
+The source database uses redo transport to ship the archived redo log files to the ‘downstream’ database WHERE the log mining server is residing. 
+The log mining server extracts changes in the form of logical change records and these are then processed by GoldenGate and written to the trail files.
+
+So in the downstream integrated capture mode, we offload any overhead associated with the capture or transformation FROM the source database 
+to the downstream database which may be used only for GoldenGate processing and not for any production user connections.
+
+
+-- on GoldenGate 12c
+
+-- on source server (o12c)
+sqlplus / as sysdba << END
+drop user scott cascade;
+create user scott identified by tiger default tablespace users;
+grant connect,resource,unlimited tablespace to scott;
+CREATE TABLE scott.myobjects as SELECT * FROM all_objects WHERE 0=1;
+END
+
+-- on target server (o12c2)
+sqlplus / as sysdba << END
+drop user scott cascade;
+create user scott identified by tiger default tablespace users;
+grant connect,resource,unlimited tablespace to scott;
+CREATE TABLE scott.myobjects as SELECT * FROM all_objects WHERE 0=1;
+END
+
+
+-- on source server (o12c)
+
+cd $OGG_HOME
+ggsci
+
+DBLOGIN USERID ggs_owner, PASSWORD ggs_owner
+
+REGISTER EXTRACT intext DATABASE
+
+ADD EXTRACT intext INTEGRATED TRANLOG, BEGIN NOW
+
+EDIT PARAMS intext
+
+EXTRACT intext
+userid ggs_owner, password ggs_owner
+TRANLOGOPTIONS INTEGRATEDPARAMS (MAX_SGA_SIZE 100)
+EXTTRAIL /u01/app/oracle/product/gg/dirdat/lt
+DDL INCLUDE all
+DDLOPTIONS REPORT, GETAPPLOPS
+TABLE scott.myobjects;
+
+ADD EXTTRAIL /u01/app/oracle/product/gg/dirdat/lt, EXTRACT intext
+
+-- data pump extract
+ADD EXTRACT intdp EXTTRAILSOURCE /u01/app/oracle/product/gg/dirdat/lt
+
+ADD RMTTRAIL /u01/app/oracle/product/gg/dirdat/rt, EXTRACT intdp
+
+EDIT PARAMS intdp
+
+EXTRACT intdp
+userid ggs_owner, password ggs_owner
+RMTHOST o12c2, MGRPORT 7809
+RMTTRAIL /u01/app/oracle/product/gg/dirdat/rt
+DDL INCLUDE all
+DDLOPTIONS REPORT, GETAPPLOPS
+TABLE scott.myobjects ;
+
+start extract intext
+start extract intdp
+
+info all
+
+view report intext
+view report intdp
+
+
+
+-- on target server (o12c2)
+
+cd $OGG_HOME
+ggsci
+
+DBLOGIN USERID ggs_owner, PASSWORD ggs_owner
+
+-- Create the Replicat group
+ADD REPLICAT rep1, EXTTRAIL /u01/app/oracle/product/gg/dirdat/rt, CHECKPOINTTABLE GGS_OWNER.CHKPTAB
+
+-- Create the parameter file for the Replicat group
+EDIT PARAMS rep1
+
+REPLICAT rep1
+DISCARDFILE /u01/app/oracle/product/gg/dirrpt/REP1.dsc, APPEND, MEGABYTES 4000
+ASSUMETARGETDEFS
+userid ggs_owner, password ggs_owner
+DDL INCLUDE all
+DDLERROR default discard
+REPERROR (default,discard)
+DDLOPTIONS REPORT
+MAP scott.*, TARGET scott.*;
+
+
+start replicat rep1
+info replicat rep1
+view report rep1
+
+-- test 
+
+-- on source server (o12c)
+
+o12c:ORCL:ORCL:SYS
+SQL> insert into scott.myobjects SELECT * FROM all_objects;
+
+71730 rows created.
+
+o12c:ORCL:ORCL:SYS
+SQL> commit;
+
+Commit complete.
+
+o12c:ORCL:ORCL:SYS
+SQL> create table scott.myobjects2 as SELECT * FROM all_objects WHERE owner!='SYS';
+
+Table created.
+
+
+-- on target server (o12c2)
+
+o12c2:ORCL:ORCL:SYS
+SQL> SELECT count(*) FROM scott.myobjects;
+
+  COUNT(*)
+----------
+     71730
+
+o12c2:ORCL:ORCL:SYS
+SQL> SELECT count(*) FROM scott.myobjects2;
+
+  COUNT(*)
+----------
+     20697
+
+
+-- stopping and deleting
+
+-- on source server (o12c)
+cd $OGG_HOME
+ggsci
+
+DBLOGIN USERID ggs_owner, PASSWORD ggs_owner
+stop extract intext
+delete extract intext
+stop extract intdp
+delete extract intdp
+unregister EXTRACT intext DATABASE
+
+-- on target server (o12c2)
+cd $OGG_HOME
+ggsci
+
+DBLOGIN USERID ggs_owner, PASSWORD ggs_owner
+stop replicat rep1
+delete replicat rep1

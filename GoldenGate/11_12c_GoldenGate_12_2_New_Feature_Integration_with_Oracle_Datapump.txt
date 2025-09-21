@@ -1,0 +1,170 @@
+https://gavinsoorma.com.au/knowledge-base/oracle-goldengate-12-2-new-feature-integration-with-oracle-datapump/
+
+In earlier versions when we had to do an Oracle database table instantiation or initial load, 
+we had to perform a number of steps – basically to handle DML changes which were occurring on the source table while the export was in progress.
+
+So we had to first ensure that there were no open or long running transactions in progress. 
+Then obtain the Current SCN of the database – pass this SCN to the FLASHBACK_SCN parameter of the Export Datapump. 
+Then after the import was over we had to ensure that we used the HANDLECOLLISIONS parameter initially for the replicat 
+and also start the Replicat FROM a particular position in the trail using the AFTERCSN parameter.
+
+Now with Goldengate 12.2, there is tighter integration with Oracle Datapump Export and Import.
+
+The ADD SCHEMATRANDATA command with the PREPARECSN parameter will ensure that the Datapump export will have information 
+about the instantiation CSN’s for each table part of the export – this will populate the system tables and views 
+with instantiation CSNs on the import and further the new Replicat parameter DBOPTIONS ENABLE_INSTANTIATION_FILTERING 
+will filter out DML and DDL records based on the table’s instantiation CSN.
+
+
+-- on GoldenGate 12.3
+
+-- on source server (o12c)
+
+sqlplus / as sysdba << END
+create or replace directory data_pump_dir as '/home/oracle/temp';
+drop user scott cascade;
+create user scott identified by tiger default tablespace users;
+grant connect,resource,unlimited tablespace to scott;
+CREATE TABLE scott.myobjects as SELECT * FROM all_objects;
+SELECT count(*) FROM scott.myobjects;
+create sequence scott.seq1 start with 1 increment by 1 nocycle;
+SELECT scott.seq1.nextval FROM dual;
+SELECT scott.seq1.currval FROM dual;
+END
+
+o12c:ORCL:ORCL:SYS
+SQL> 
+  COUNT(*)
+----------
+     71502
+
+o12c:ORCL:ORCL:SYS
+SQL> 
+Sequence created.
+
+o12c:ORCL:ORCL:SYS
+SQL> 
+   NEXTVAL
+----------
+	 1
+
+o12c:ORCL:ORCL:SYS
+SQL> 
+   CURRVAL
+----------
+	 1
+
+
+-- on target server (o12c2)
+
+sqlplus / as sysdba << END
+create or replace directory data_pump_dir as '/home/oracle/temp';
+drop user scott cascade;
+create user scott identified by tiger default tablespace users;
+grant connect,resource,unlimited tablespace to scott;
+END
+
+
+
+-- on source server (o12c)
+
+cd $OGG_HOME
+ggsci
+
+-- Create the Online Extract Group
+ADD EXTRACT ext1, TRANLOG, BEGIN NOW
+
+-- Create the Trail
+ADD RMTTRAIL /u01/app/oracle/product/gg/dirdat/rt, EXTRACT ext1
+
+-- Create a parameter file for the online Extract group ext1
+EDIT PARAMS ext1
+
+EXTRACT ext1
+USERID ggs_owner, PASSWORD ggs_owner
+RMTHOST o12c2, MGRPORT 7809
+RMTTRAIL /u01/app/oracle/product/gg/dirdat/rt
+TABLE scott.myobjects;
+SEQUENCE scott.seq1;
+
+-- login in the source database and add the schematrandata
+DBLOGIN USERID ggs_owner, PASSWORD ggs_owner
+
+add schematrandata scott preparecsn nowait
+
+-- Start the Extract process, the transactions began to accumulate in the remote trail on the target server
+START EXTRACT ext1
+STATUS EXTRACT ext1
+INFO EXTRACT ext1
+view report ext1
+
+-- perform the export
+
+-- exports the schema SCOTT
+cat <<END > /home/oracle/temp/users_SCOTT_EXP.par
+directory       =   data_pump_dir
+dumpfile        =   users_SCOTT%U.dmp
+logfile         =   users_SCOTT_EXP.log
+schemas         =   SCOTT
+parallel        =   2
+filesize        =   2G
+exclude         =   statistics
+END
+expdp system/manager parfile=/home/oracle/temp/users_SCOTT_EXP.par
+
+-- while exporting, note the expdp info 
+FLASHBACK automatically enabled to preserve database integrity.
+
+-- Execute more transactions during the export
+
+o12c:ORCL:ORCL:SYS
+SQL> SELECT scott.seq1.nextval FROM dual;
+
+   NEXTVAL
+----------
+	 2
+
+-- copy the dump on the target server (o12c2)
+
+scp /home/oracle/temp/users_SCOTT*.dmp o12c2:/home/oracle/temp
+
+-- on target server (o12c2)
+
+cd $OGG_HOME
+ggsci
+
+-- Create the online Replicat group
+ADD REPLICAT rep1, EXTTRAIL /u01/app/oracle/product/gg/dirdat/rt CHECKPOINTTABLE GGS_OWNER.CHKPTAB
+
+-- Create a parameter file for the online Replicat group, rep1
+-- add DBOPTIONS ENABLE_INSTANTIATION_FILTERING
+EDIT PARAMS rep1
+
+REPLICAT rep1
+ASSUMETARGETDEFS
+USERID ggs_owner, PASSWORD ggs_owner
+DBOPTIONS ENABLE_INSTANTIATION_FILTERING
+USERID ggs_owner, PASSWORD ggs_owner
+MAP scott.*, TARGET scott.*;
+
+-- perform the import
+
+-- import the SCOTT schema
+cat <<END > /home/oracle/temp/users_SCOTT_IMP.par
+directory       = data_pump_dir
+dumpfile        = users_SCOTT%U.dmp
+logfile         = users_SCOTT_IMP.log
+schemas         = SCOTT
+parallel        = 2
+END
+impdp system/manager parfile=/home/oracle/temp/users_SCOTT_IMP.par
+
+cd $OGG_HOME
+ggsci
+
+-- Start the Replicat process
+START REPLICAT rep1
+status replicat rep1
+INFO REPLICAT rep1
+view report rep1
+

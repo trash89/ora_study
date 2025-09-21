@@ -1,0 +1,19 @@
+--
+-- GoldenGate Software
+-- Copyright 2009
+-- San Francisco, CA, USA
+-- All rights reserved.
+--
+-- Program description:
+-- Support script for proceeding with DDL installation in case of other sessions active
+-- DO NOT RUN THIS SCRIPT
+--
+-- IMPORTANT, NOTE:
+-- 1. Do not execute this script
+-- 2. THIS SCRIPT IS INTENTIONALLY EMPTY (NO CODE)
+-- 
+-- Revision history
+--
+--  06/25/2009 - SRDJAN
+--    OS-6683: Initial version
+

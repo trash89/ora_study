@@ -1,0 +1,517 @@
+-- 19c
+
+alter index SCOTT.PK_DEPT   rebuild tablespace scott_indx parallel 2 online;
+alter index SCOTT.PK_EMP    rebuild tablespace scott_indx parallel 2 online;
+
+alter index SCOTT.EMP_IDX rebuild partition P_10        tablespace scott_indx parallel 2 online;
+alter index SCOTT.EMP_IDX rebuild partition P_20        tablespace scott_indx parallel 2 online;
+alter index SCOTT.EMP_IDX rebuild partition P_30        tablespace scott_indx parallel 2 online;
+alter index SCOTT.EMP_IDX rebuild partition P_40        tablespace scott_indx parallel 2 online;
+alter index SCOTT.EMP_IDX rebuild partition P_OTHERS    tablespace scott_indx parallel 2 online;
+
+alter index SCOTT.EMP_IDX modify default attributes tablespace scott_indx;
+
+alter table SCOTT.TEST_LOB move tablespace scott_lob lob (AWLOB) store as ( tablespace scott_lob) parallel 2;
+
+alter table SCOTT.TEST_LOB move tablespace scott_lob parallel 2
+    lob (INST_CHK_LOGIC) store as ( tablespace scott_lob) 
+    lob (USG_DET_LOGIC) store as ( tablespace scott_lob) 
+;
+
+
+-- reorg user SH
+create tablespace sh_data datafile  '/u02/oradata/CDB1/pdb1/sh_data01.dbf'  size 1m autoextend on next 1m;
+create tablespace sh_indx datafile  '/u02/oradata/CDB1/pdb1/sh_indx01.dbf'  size 1m autoextend on next 1m;
+create tablespace sh_lob datafile   '/u02/oradata/CDB1/pdb1/sh_lob01.dbf'   size 1m autoextend on next 1m;
+alter user sh default tablespace sh_data;
+grant unlimited tablespace to sh;
+
+-- with UPDATE indexes :
+-- alter table SH.CHANNELS                     move tablespace sh_data online update indexes parallel 2;
+-- without, indexes made UNUSABLE to be rebuilt afterwards
+alter table SH.CHANNELS                     move tablespace sh_data online parallel 2;
+alter table SH.COUNTRIES                    move tablespace sh_data online parallel 2;
+alter table SH.PRODUCTS                     move tablespace sh_data online parallel 2;
+alter table SH.PROMOTIONS                   move tablespace sh_data online parallel 2;
+alter table SH.TIMES                        move tablespace sh_data online parallel 2;
+alter table SH.SUPPLEMENTARY_DEMOGRAPHICS   move tablespace sh_data online parallel 2;
+alter table SH.CUSTOMERS                    move tablespace sh_data online parallel 2;
+alter table SH.DIMENSION_EXCEPTIONS         move tablespace sh_data online parallel 2;
+alter table SH.SUPPLEMENTARY_DEMOGRAPHICS   move tablespace sh_data online parallel 2;
+alter table SH.DR$SUP_TEXT_IDX$I            move tablespace sh_data online parallel 2;
+alter table SH.DR$SUP_TEXT_IDX$R            move tablespace sh_data online parallel 2;
+alter table SH.DR$SUP_TEXT_IDX$U            move tablespace sh_data online parallel 2;
+alter table SH.COSTS        modify default attributes tablespace sh_data;
+alter table SH.SALES        modify default attributes tablespace sh_data;
+
+alter table SH.COSTS move partition COSTS_1995      tablespace sh_data online update indexes parallel 2;
+
+alter index SH.COSTS_PROD_BIX rebuild partition COSTS_1995              tablespace sh_indx parallel 2 online;
+
+
+-- reog OE
+create tablespace oe_data datafile  '/u02/oradata/CDB1/pdb1/oe_data01.dbf'  size 1m autoextend on next 1m;
+create tablespace oe_indx datafile  '/u02/oradata/CDB1/pdb1/oe_indx01.dbf'  size 1m autoextend on next 1m;
+create tablespace oe_lob datafile   '/u02/oradata/CDB1/pdb1/oe_lob01.dbf'   size 1m autoextend on next 1m;
+alter user oe default tablespace oe_data;
+grant unlimited tablespace to oe;
+
+
+alter table OE.PROMOTIONS                       move tablespace oe_data parallel 2;
+alter table OE.WAREHOUSES                       move tablespace oe_data parallel 2;
+alter table OE.ORDERS                           move tablespace oe_data parallel 2;
+alter table OE.PRODUCT_INFORMATION              move tablespace oe_data parallel 2;
+alter table OE.CUSTOMERS                        move tablespace oe_data parallel 2;
+alter table OE.ORDER_ITEMS                      move tablespace oe_data parallel 2;
+alter table OE.INVENTORIES                      move tablespace oe_data parallel 2;
+alter table OE.PRODUCT_DESCRIPTIONS             move tablespace oe_data parallel 2;
+alter table OE.CATEGORIES_TAB                   move tablespace oe_data parallel 2;
+
+
+alter table OE.SUBCATEGORY_REF_LIST_NESTEDTAB   move tablespace oe_lob parallel 2;
+alter table OE.PRODUCT_REF_LIST_NESTEDTAB       move tablespace oe_lob parallel 2;
+
+ALTER TABLE OE.CUSTOMERS MOVE TABLESPACE oe_lob parallel 2
+    VARRAY "CUST_GEO_LOCATION"."SDO_ELEM_INFO" STORE AS LOB(TABLESPACE oe_lob)
+    VARRAY "CUST_GEO_LOCATION"."SDO_ORDINATES" STORE AS LOB(TABLESPACE oe_lob)
+;
+
+
+ALTER TABLE OE.WAREHOUSES MOVE TABLESPACE oe_lob parallel 2
+    VARRAY "WH_GEO_LOCATION"."SDO_ELEM_INFO" STORE AS LOB(TABLESPACE oe_lob)
+    VARRAY "WH_GEO_LOCATION"."SDO_ORDINATES" STORE AS LOB(TABLESPACE oe_lob)
+;
+alter table OE.WAREHOUSES move TABLESPACE oe_lob  parallel 2
+    lob (SYS_NC00003$) store as ( tablespace OE_lob)
+;
+
+alter index OE.CUSTOMERS_PK             rebuild tablespace oe_indx parallel 2 online;
+alter index OE.CUST_ACCOUNT_MANAGER_IX  rebuild tablespace oe_indx parallel 2 online;
+alter index OE.CUST_EMAIL_IX            rebuild tablespace oe_indx parallel 2 online;
+alter index OE.CUST_LNAME_IX            rebuild tablespace oe_indx parallel 2 online;
+alter index OE.CUST_UPPER_NAME_IX       rebuild tablespace oe_indx parallel 2 online;
+alter index OE.INVENTORY_IX             rebuild tablespace oe_indx parallel 2 online;
+alter index OE.INV_PRODUCT_IX           rebuild tablespace oe_indx parallel 2 online;
+alter index OE.ITEM_ORDER_IX            rebuild tablespace oe_indx parallel 2 online;
+alter index OE.ITEM_PRODUCT_IX          rebuild tablespace oe_indx parallel 2 online;
+alter index OE.ORDER_ITEMS_PK           rebuild tablespace oe_indx parallel 2 online;
+alter index OE.ORDER_ITEMS_UK           rebuild tablespace oe_indx parallel 2 online;
+alter index OE.ORDER_PK                 rebuild tablespace oe_indx parallel 2 online;
+alter index OE.ORD_CUSTOMER_IX          rebuild tablespace oe_indx parallel 2 online;
+alter index OE.ORD_ORDER_DATE_IX        rebuild tablespace oe_indx parallel 2 online;
+alter index OE.ORD_SALES_REP_IX         rebuild tablespace oe_indx parallel 2 online;
+alter index OE.PRD_DESC_PK              rebuild tablespace oe_indx parallel 2 online;
+alter index OE.PRODUCT_INFORMATION_PK   rebuild tablespace oe_indx parallel 2 online;
+alter index OE.PROD_NAME_IX             rebuild tablespace oe_indx parallel 2 online;
+alter index OE.PROD_SUPPLIER_IX         rebuild tablespace oe_indx parallel 2 online;
+alter index OE.PROMO_ID_PK              rebuild tablespace oe_indx parallel 2 online;
+alter index OE.WAREHOUSES_PK            rebuild tablespace oe_indx parallel 2 online;
+alter index OE.WHS_LOCATION_IX          rebuild tablespace oe_indx parallel 2 online;
+alter index OE.LINEITEM_TABLE_MEMBERS   rebuild tablespace oe_indx parallel 2 online;
+alter index OE.ACTION_TABLE_MEMBERS     rebuild tablespace oe_indx parallel 2 online;
+
+alter index OE.SYS_C008080              rebuild tablespace oe_indx parallel 2 online;
+alter index OE.SYS_C008081              rebuild tablespace oe_indx parallel 2 online;
+alter index OE.SYS_FK0000074515N00009$  rebuild tablespace oe_indx parallel 2 online;
+alter index OE.SYS_C008082              rebuild tablespace oe_indx parallel 2 online;
+alter index OE.SYS_C008123              rebuild tablespace oe_indx parallel 2 online;
+alter index OE.SYS_FK0000074515N00007$  rebuild tablespace oe_indx parallel 2 online;
+
+
+--- user HR
+create tablespace hr_data datafile '/u02/oradata/CDB1/pdb1/hr_data01.dbf' size 1m autoextend on next 1m;
+create tablespace hr_indx datafile '/u02/oradata/CDB1/pdb1/hr_indx01.dbf' size 1m autoextend on next 1m;
+alter user hr default tablespace hr_data;
+grant unlimited tablespace to hr;
+
+alter table HR.REGIONS          move tablespace hr_data parallel 2;
+alter table HR.JOB_HISTORY      move tablespace hr_data parallel 2;
+alter table HR.JOBS             move tablespace hr_data parallel 2;
+alter table HR.LOCATIONS        move tablespace hr_data parallel 2;
+alter table HR.DEPARTMENTS      move tablespace hr_data parallel 2;
+alter table HR.EMPLOYEES        move tablespace hr_data parallel 2;
+
+-- IOT table
+alter table HR.COUNTRIES        move tablespace hr_indx parallel 2;
+
+alter index HR.DEPT_ID_PK               rebuild tablespace hr_indx parallel 2 online;
+alter index HR.DEPT_LOCATION_IX         rebuild tablespace hr_indx parallel 2 online;
+alter index HR.EMP_DEPARTMENT_IX        rebuild tablespace hr_indx parallel 2 online;
+alter index HR.EMP_EMAIL_UK             rebuild tablespace hr_indx parallel 2 online;
+alter index HR.EMP_EMP_ID_PK            rebuild tablespace hr_indx parallel 2 online;
+alter index HR.EMP_JOB_IX               rebuild tablespace hr_indx parallel 2 online;
+alter index HR.EMP_MANAGER_IX           rebuild tablespace hr_indx parallel 2 online;
+alter index HR.EMP_NAME_IX              rebuild tablespace hr_indx parallel 2 online;
+alter index HR.JHIST_DEPARTMENT_IX      rebuild tablespace hr_indx parallel 2 online;
+alter index HR.JHIST_EMPLOYEE_IX        rebuild tablespace hr_indx parallel 2 online;
+alter index HR.JHIST_EMP_ID_ST_DATE_PK  rebuild tablespace hr_indx parallel 2 online;
+alter index HR.JHIST_JOB_IX             rebuild tablespace hr_indx parallel 2 online;
+alter index HR.JOB_ID_PK                rebuild tablespace hr_indx parallel 2 online;
+alter index HR.LOC_CITY_IX              rebuild tablespace hr_indx parallel 2 online;
+alter index HR.LOC_COUNTRY_IX           rebuild tablespace hr_indx parallel 2 online;
+alter index HR.LOC_ID_PK                rebuild tablespace hr_indx parallel 2 online;
+alter index HR.LOC_STATE_PROVINCE_IX    rebuild tablespace hr_indx parallel 2 online;
+alter index HR.REG_ID_PK                rebuild tablespace hr_indx parallel 2 online;
+
+
+--- user IX
+create tablespace ix_data datafile  '/u02/oradata/CDB1/pdb1/ix_data01.dbf'  size 1m autoextend on next 1m;
+create tablespace ix_indx datafile  '/u02/oradata/CDB1/pdb1/ix_indx01.dbf'  size 1m autoextend on next 1m;
+create tablespace ix_lob datafile   '/u02/oradata/CDB1/pdb1/ix_lob01.dbf'   size 1m autoextend on next 1m;
+alter user ix default tablespace ix_data;
+grant unlimited tablespace to ix;
+create or replace directory my_data_pump_dir as '/home/oracle/temp';
+
+cat <<END > /tmp/userdump.par
+directory       = my_data_pump_dir
+dumpfile        = ix.dmp
+schemas         = IX
+exclude         = statistics
+FLASHBACK_TIME  = systimestamp
+END
+expdp \"sys/manager@pdb1 as sysdba\" parfile=/tmp/userdump.par
+
+drop user ix cascade;
+
+cat <<END > /tmp/userdump.par
+directory       = my_data_pump_dir
+dumpfile        = ix.dmp
+transform       = storage:n
+transform       = segment_attributes:n
+END
+impdp \"sys/manager@pdb1 as sysdba\" parfile=/tmp/userdump.par
+
+-- user PM
+create tablespace pm_data datafile  '/u02/oradata/CDB1/pdb1/pm_data01.dbf'  size 1m autoextend on next 1m;
+create tablespace pm_indx datafile  '/u02/oradata/CDB1/pdb1/pm_indx01.dbf'  size 1m autoextend on next 1m;
+create tablespace pm_lob datafile   '/u02/oradata/CDB1/pdb1/pm_lob01.dbf'   size 1m autoextend on next 1m;
+alter user pm default tablespace pm_data;
+grant unlimited tablespace to pm;
+
+alter table PM.PRINT_MEDIA move tablespace pm_data parallel 2
+    lob (AD_COMPOSITE) store as ( tablespace pm_lob)
+    lob (AD_SOURCETEXT) store as ( tablespace pm_lob)
+    lob (AD_FINALTEXT) store as ( tablespace pm_lob)
+    lob (AD_FLTEXTN) store as ( tablespace pm_lob)
+    lob (AD_PHOTO) store as ( tablespace pm_lob)
+;
+
+alter table PM.ONLINE_MEDIA move tablespace pm_data parallel 2
+    lob (PRODUCT_TEXT)                                  store as ( tablespace pm_lob)
+    lob ("PRODUCT_PHOTO"."SOURCE"."LOCALDATA")          store as ( tablespace pm_lob)
+    lob ("PRODUCT_VIDEO"."COMMENTS")                    store as ( tablespace pm_lob)
+    lob ("PRODUCT_AUDIO"."SOURCE"."LOCALDATA")          store as ( tablespace pm_lob)
+    lob ("PRODUCT_VIDEO"."SOURCE"."LOCALDATA")          store as ( tablespace pm_lob)
+    lob ("PRODUCT_AUDIO"."COMMENTS")                    store as ( tablespace pm_lob)
+    lob ("PRODUCT_PHOTO_SIGNATURE"."SIGNATURE")         store as ( tablespace pm_lob)
+    lob ("PRODUCT_TESTIMONIALS"."COMMENTS")             store as ( tablespace pm_lob)
+    lob ("PRODUCT_TESTIMONIALS"."SOURCE"."LOCALDATA")   store as ( tablespace pm_lob)
+    lob ("PRODUCT_THUMBNAIL"."SOURCE"."LOCALDATA")      store as ( tablespace pm_lob)
+;
+
+alter table PM.PRINT_MEDIA move tablespace pm_data parallel 2
+    lob ("AD_HEADER"."LOGO") store as ( tablespace pm_lob)
+;
+
+alter table PM.TEXTDOCS_NESTEDTAB move tablespace pm_data parallel 2 
+    lob(FORMATTED_DOC)  store as ( tablespace pm_lob)
+;
+
+alter index PM.PRINTMEDIA_PK    rebuild tablespace pm_indx parallel 2 online;
+alter index PM.ONLINEMEDIA_PK   rebuild tablespace pm_indx parallel 2 online;
+
+alter index PM.SYS_C008069              rebuild tablespace pm_indx parallel 2 online;
+alter index PM.SYS_FK0000073534N00007$  rebuild tablespace pm_indx parallel 2 online;
+
+
+-- get the path of DIRECTORY my_data_pump_dir
+cat <<END > /tmp/get_data_pump_dir.sql
+connect / as sysdba
+set lines 200 pages 0 echo off head off trim off trims off feed off
+alter session set container=pdb1;
+SELECT trim(directory_path) FROM dba_directories WHERE directory_name='MY_DATA_PUMP_DIR';
+exit
+END
+vdir_path=$(${ORACLE_HOME}/bin/sqlplus -L -S /nolog @/tmp/get_data_pump_dir.sql | tr -d '\r' | tr -d ' ' | tr -d '\n')
+rm -f /tmp/get_data_pump_dir.sql
+echo $vdir_path
+echo $ORACLE_SID
+
+
+-- exports users EXAMPLE
+cat <<END > $vdir_path/users_example_EXP.par
+directory       =   my_data_pump_dir
+dumpfile        =   users_example%U.dmp
+logfile         =   users_example_EXP.log
+schemas         =   BI,HR,IX,OE,PM,SCOTT,SH
+parallel        =   2
+filesize        =   2G
+exclude         =   statistics
+FLASHBACK_TIME  =   systimestamp
+END
+expdp system/manager@pdb1 parfile=$vdir_path/users_example_EXP.par
+
+-- export the metadata for the EXAMPLE users
+cat <<END > $vdir_path/users_example_meta_EXP.par
+directory       =   my_data_pump_dir
+dumpfile        =   users_example_meta.dmp
+logfile         =   users_example_meta_EXP.log
+content         =   metadata_only
+schemas         =   BI,HR,IX,OE,PM,SCOTT,SH
+exclude         =   statistics
+FLASHBACK_TIME  =   systimestamp
+END
+expdp system/manager@pdb1 parfile=$vdir_path/users_example_meta_EXP.par
+
+-- extract the sql definitions FROM the metadata export
+cat <<END > $vdir_path/users_example_meta_IMP.par
+directory   = my_data_pump_dir
+dumpfile    = users_example_meta.dmp
+logfile     = users_example_meta_IMP.log
+SQLFILE     = users_example_meta.sql
+#schemas    = scott
+transform   = storage:n
+transform   = segment_attributes:n
+END
+impdp system/manager@pdb1 parfile=$vdir_path/users_example_meta_IMP.par
+
+-- import the EXAMPLE users
+cat <<END > $vdir_path/users_example_IMP.par
+directory           = my_data_pump_dir
+dumpfile            = users_example%U.dmp
+logfile             = users_example_IMP.log
+schemas             = MOVIE,SCOTT,SH,SOE,TPCC,TPCDSLIKE,TPCH
+transform           = storage:n
+transform           = segment_attributes:n
+DATA_OPTIONS        = TRUST_EXISTING_TABLE_PARTITIONS
+PARTITION_OPTIONS   = MERGE
+END
+impdp system/manager@pdb1 parfile=$vdir_path/users_example_IMP.par
+
+Datafiles and tempfiles
+TABLESPACE_NAME 	  Status	 Enabled BigF Flb Bck Inc(MB)  Size(MB)  Id FILE_NAME
+------------------------------ --------- ---------- ---- --- --- ------- --------- --- ----------------------------------------------------------------------------------------------------
+MOVIE_DATA		       ONLINE	 READ WRITE NO	 YES YES       1    2255  50 /u02/oradata/CDB1/pdb1/movie_data01.dbf
+MOVIE_INDX		       ONLINE	 READ WRITE NO	 YES YES       1     712  51 /u02/oradata/CDB1/pdb1/movie_indx01.dbf
+MOVIE_LOB		       ONLINE	 READ WRITE NO	 YES YES       1     231  52 /u02/oradata/CDB1/pdb1/movie_lob01.dbf
+PASSENGERS_DATA 	   ONLINE	 READ WRITE NO	 YES YES       1    1207  53 /u02/oradata/CDB1/pdb1/passengers_data01.dbf
+PASSENGERS_INDX 	   ONLINE	 READ WRITE NO	 YES YES       1	   1  55 /u02/oradata/CDB1/pdb1/passengers_indx01.dbf
+PASSENGERS_LOB		   ONLINE	 READ WRITE NO	 YES YES       1	   1  56 /u02/oradata/CDB1/pdb1/passengers_lob01.dbf
+SCOTT_DATA		       ONLINE	 READ WRITE NO	 YES YES       1	  89  34 /u02/oradata/CDB1/pdb1/scott_data01.dbf
+SCOTT_INDX		       ONLINE	 READ WRITE NO	 YES YES       1	   1  35 /u02/oradata/CDB1/pdb1/scott_indx01.dbf
+SCOTT_LOB		       ONLINE	 READ WRITE NO	 YES YES       1	  26  36 /u02/oradata/CDB1/pdb1/scott_lob01.dbf
+SH_DATA 		       ONLINE	 READ WRITE NO	 YES YES       1    1224  40 /u02/oradata/CDB1/pdb1/sh_data01.dbf
+SH_INDX 		       ONLINE	 READ WRITE NO	 YES YES       1     258  41 /u02/oradata/CDB1/pdb1/sh_indx01.dbf
+SOE_DATA		       ONLINE	 READ WRITE NO	 YES YES       1    1433  42 /u02/oradata/CDB1/pdb1/soe_data01.dbf
+SOE_INDX		       ONLINE	 READ WRITE NO	 YES YES       1     872  43 /u02/oradata/CDB1/pdb1/soe_indx01.dbf
+SYSAUX			       ONLINE	 READ WRITE NO	 YES YES      10     430  10 /u02/oradata/CDB1/pdb1/sysaux01.dbf
+SYSTEM			       SYSTEM	 READ WRITE NO	 YES YES      10     340   9 /u02/oradata/CDB1/pdb1/system01.dbf
+TEMP			       ONLINE		              NO YES NO    0    6010   3 /u02/oradata/CDB1/pdb1/temp01.dbf
+TPCC_DATA		       ONLINE	 READ WRITE NO	 YES YES       1     317  44 /u02/oradata/CDB1/pdb1/tpcc_data01.dbf
+TPCC_INDX		       ONLINE	 READ WRITE NO	 YES YES       1     198  45 /u02/oradata/CDB1/pdb1/tpcc_indx01.dbf
+TPCDS_DATA		       ONLINE	 READ WRITE NO	 YES YES       1    1491  46 /u02/oradata/CDB1/pdb1/tpcds_data01.dbf
+TPCDS_INDX		       ONLINE	 READ WRITE NO	 YES YES       1     362  47 /u02/oradata/CDB1/pdb1/tpcds_indx01.dbf
+TPCH_DATA		       ONLINE	 READ WRITE NO	 YES YES       1    1132  48 /u02/oradata/CDB1/pdb1/tpch_data01.dbf
+TPCH_INDX		       ONLINE	 READ WRITE NO	 YES YES       1	  31  49 /u02/oradata/CDB1/pdb1/tpch_indx01.dbf
+UNDOTBS1		       ONLINE	 READ WRITE NO	 YES YES       5     270  11 /u02/oradata/CDB1/pdb1/undotbs01.dbf
+USERS			       ONLINE	 READ WRITE NO	 YES YES       1	   2  12 /u02/oradata/CDB1/pdb1/users01.dbf
+
+Users:
+MOVIE			       OPEN		    MOVIE_DATA		      TEMP
+PASSENGER		       OPEN		    PASSENGERS_DATA	      TEMP
+SCOTT			       OPEN		    SCOTT_DATA		      TEMP
+SH			           OPEN		    SH_DATA		          TEMP
+SOE			           OPEN		    SOE_DATA		      TEMP
+TPCC			       OPEN		    TPCC_DATA		      TEMP
+TPCDSLIKE		       OPEN		    TPCDS_DATA		      TEMP
+TPCH			       OPEN		    TPCH_DATA		      TEMP
+
+drop user scott     cascade;
+drop user movie     cascade;
+drop user sh        cascade;
+drop user soe       cascade;
+drop user tpcc      cascade;
+drop user tpcdslike cascade;
+drop user tpch      cascade;
+drop user BI        cascade;
+drop user HR        cascade;
+drop user IX        cascade;
+drop user OE        cascade;
+drop user PM        cascade;
+drop user passenger cascade;
+
+-- resize datafiles after suppressing the users
+alter database datafile '/u02/oradata/CDB1/pdb1/movie_data01.dbf'       resize 2M;
+alter database datafile '/u02/oradata/CDB1/pdb1/movie_indx01.dbf'       resize 2M;
+alter database datafile '/u02/oradata/CDB1/pdb1/movie_lob01.dbf'        resize 2M;
+alter database datafile '/u02/oradata/CDB1/pdb1/passengers_data01.dbf'  resize 2M;
+alter database datafile '/u02/oradata/CDB1/pdb1/passengers_indx01.dbf'  resize 2M;
+alter database datafile '/u02/oradata/CDB1/pdb1/passengers_lob01.dbf'   resize 2M;
+alter database datafile '/u02/oradata/CDB1/pdb1/scott_data01.dbf'       resize 2M;
+alter database datafile '/u02/oradata/CDB1/pdb1/scott_indx01.dbf'       resize 2M;
+alter database datafile '/u02/oradata/CDB1/pdb1/scott_lob01.dbf'        resize 2M;
+alter database datafile '/u02/oradata/CDB1/pdb1/sh_data01.dbf'          resize 2M;
+alter database datafile '/u02/oradata/CDB1/pdb1/sh_indx01.dbf'          resize 2M;
+alter database datafile '/u02/oradata/CDB1/pdb1/soe_data01.dbf'         resize 2M;
+alter database datafile '/u02/oradata/CDB1/pdb1/soe_indx01.dbf'         resize 2M;
+alter database datafile '/u02/oradata/CDB1/pdb1/tpcc_data01.dbf'        resize 2M;
+alter database datafile '/u02/oradata/CDB1/pdb1/tpcc_indx01.dbf'        resize 2M;
+alter database datafile '/u02/oradata/CDB1/pdb1/tpcds_data01.dbf'       resize 2M;
+alter database datafile '/u02/oradata/CDB1/pdb1/tpcds_indx01.dbf'       resize 2M;
+alter database datafile '/u02/oradata/CDB1/pdb1/tpch_data01.dbf'        resize 2M;
+alter database datafile '/u02/oradata/CDB1/pdb1/tpch_indx01.dbf'        resize 2M;
+alter database datafile '/u02/oradata/CDB1/pdb1/users01.dbf'            resize 2M;
+alter database tempfile '/u02/oradata/CDB1/pdb1/temp01.dbf'             resize 2G;
+
+drop tablespace EXAMPLE             including contents and datafiles;
+drop tablespace HR_DATA             including contents and datafiles;
+drop tablespace HR_INDX             including contents and datafiles;
+drop tablespace IX_DATA             including contents and datafiles;
+drop tablespace IX_INDX             including contents and datafiles;
+drop tablespace IX_LOB              including contents and datafiles;
+drop tablespace OE_DATA             including contents and datafiles;
+drop tablespace OE_INDX             including contents and datafiles;
+drop tablespace OE_LOB              including contents and datafiles;
+drop tablespace PM_DATA             including contents and datafiles;
+drop tablespace PM_INDX             including contents and datafiles;
+drop tablespace PM_LOB              including contents and datafiles;
+drop tablespace SCOTT_DATA          including contents and datafiles;
+drop tablespace SCOTT_INDX          including contents and datafiles;
+drop tablespace SCOTT_LOB           including contents and datafiles;
+drop tablespace SH_DATA             including contents and datafiles;
+drop tablespace SH_INDX             including contents and datafiles;
+drop tablespace SH_LOB              including contents and datafiles;
+drop tablespace movie_data          including contents and datafiles;
+drop tablespace movie_indx          including contents and datafiles;
+drop tablespace movie_lob           including contents and datafiles;
+drop tablespace PASSENGERS_data     including contents and datafiles;
+drop tablespace PASSENGERS_indx     including contents and datafiles;
+drop tablespace PASSENGERS_lob      including contents and datafiles;
+
+
+
+create tablespace scott_data datafile '/u02/oradata/CDB1/pdb1/scott_data01.dbf' size 1m autoextend on next 1m;
+create tablespace scott_indx datafile '/u02/oradata/CDB1/pdb1/scott_indx01.dbf' size 1m autoextend on next 1m;
+create tablespace scott_lob  datafile '/u02/oradata/CDB1/pdb1/scott_lob01.dbf'  size 1m autoextend on next 1m;
+
+create tablespace movie_data datafile '/u02/oradata/CDB1/pdb1/movie_data01.dbf' size 1m autoextend on next 1m;
+create tablespace movie_indx datafile '/u02/oradata/CDB1/pdb1/movie_indx01.dbf' size 1m autoextend on next 1m;
+create tablespace movie_lob  datafile '/u02/oradata/CDB1/pdb1/movie_lob01.dbf'  size 1m autoextend on next 1m;
+
+create tablespace sh_data datafile '/u02/oradata/CDB1/pdb1/sh_data01.dbf' size 1m autoextend on next 1m;
+create tablespace sh_indx datafile '/u02/oradata/CDB1/pdb1/sh_indx01.dbf' size 1m autoextend on next 1m;
+
+create tablespace soe_data datafile '/u02/oradata/CDB1/pdb1/soe_data01.dbf' size 1m autoextend on next 1m;
+create tablespace soe_indx datafile '/u02/oradata/CDB1/pdb1/soe_indx01.dbf' size 1m autoextend on next 1m;
+
+create tablespace tpcc_data datafile '/u02/oradata/CDB1/pdb1/tpcc_data01.dbf' size 1m autoextend on next 1m;
+create tablespace tpcc_indx datafile '/u02/oradata/CDB1/pdb1/tpcc_indx01.dbf' size 1m autoextend on next 1m;
+
+create tablespace tpcds_data datafile '/u02/oradata/CDB1/pdb1/tpcds_data01.dbf' size 1m autoextend on next 1m;
+create tablespace tpcds_indx datafile '/u02/oradata/CDB1/pdb1/tpcds_indx01.dbf' size 1m autoextend on next 1m;
+
+create tablespace tpch_data datafile '/u02/oradata/CDB1/pdb1/tpch_data01.dbf' size 1m autoextend on next 1m;
+create tablespace tpch_indx datafile '/u02/oradata/CDB1/pdb1/tpch_indx01.dbf' size 1m autoextend on next 1m;
+
+create tablespace PASSENGERS_data datafile  '/u02/oradata/CDB1/pdb1/passengers_data01.dbf'  size 1m autoextend on next 1m;
+create tablespace PASSENGERS_indx datafile  '/u02/oradata/CDB1/pdb1/passengers_indx01.dbf'  size 1m autoextend on next 1m;
+create tablespace PASSENGERS_lob datafile   '/u02/oradata/CDB1/pdb1/passengers_lob01.dbf'   size 1m autoextend on next 1m;
+
+
+create user scott       identified by tiger         default tablespace scott_data       temporary tablespace temp;
+create user movie       identified by movie         default tablespace movie_data       temporary tablespace temp;
+create user sh          identified by sh            default tablespace sh_data          temporary tablespace temp;
+create user soe         identified by soe           default tablespace soe_data         temporary tablespace temp;
+create user tpcc        identified by tpcc          default tablespace tpcc_data        temporary tablespace temp;
+create user tpcdslike   identified by tpcdslike     default tablespace tpcds_data       temporary tablespace temp;
+create user tpch        identified by tpch          default tablespace tpch_data        temporary tablespace temp;
+create user passenger   identified by passenger     default tablespace passengers_data  temporary tablespace temp;
+
+grant connect,resource,unlimited tablespace to scott,movie,sh,soe,tpcc,tpcdslike,tpch,passenger;
+grant execute on dbms_lock to tpcdslike,tpcc;
+
+set lines 200 pages 0
+spool /tmp/atts.sql
+SELECT 'alter table '||owner||'."'||table_name||'" initrans 2 pctfree 10;' FROM dba_tables WHERE owner in ('MOVIE','PASSENGER','SCOTT','SH','SOE','TPCC','TPCDSLIKE','TPCH');
+SELECT 'alter index '||owner||'."'||index_name||'" initrans 2;' FROM dba_indexes WHERE owner in ('MOVIE','PASSENGER','SCOTT','SH','SOE','TPCC','TPCDSLIKE','TPCH');
+spool off
+@/tmp/atts.sql
+ho rm -f /tmp/atts.sql
+
+
+-- get the path of DIRECTORY my_data_pump_dir
+cat <<END > /tmp/get_data_pump_dir.sql
+connect / as sysdba
+set lines 200 pages 0 echo off head off trim off trims off feed off
+rem alter session set container=pdb1;
+SELECT trim(directory_path) FROM dba_directories WHERE directory_name='MY_DATA_PUMP_DIR';
+exit
+END
+vdir_path=$(${ORACLE_HOME}/bin/sqlplus -L -S /nolog @/tmp/get_data_pump_dir.sql | tr -d '\r' | tr -d ' ' | tr -d '\n')
+rm -f /tmp/get_data_pump_dir.sql
+echo $vdir_path
+
+-- exports users bench
+cat <<END > $vdir_path/users_bench_EXP.par
+directory       =   my_data_pump_dir
+dumpfile        =   users_bench%U.dmp
+logfile         =   users_bench_EXP.log
+schemas         =   MOVIE,SCOTT,SH,SOE,TPCC,TPCDSLIKE,TPCH,PASSENGER
+parallel        =   2
+filesize        =   2G
+exclude         =   statistics
+FLASHBACK_TIME  =   systimestamp
+END
+expdp system/manager@pdb1 parfile=$vdir_path/users_bench_EXP.par
+
+-- import users bench
+cat <<END > $vdir_path/users_bench_IMP.par
+directory           = my_data_pump_dir
+dumpfile            = users_bench%U.dmp
+logfile             = users_bench_IMP.log
+schemas             = SCOTT,MOVIE,SH,SOE,TPCC,TPCDSLIKE,TPCH,PASSENGER
+parallel            = 4
+#transform           = storage:n
+#transform           = segment_attributes:n
+DATA_OPTIONS        = TRUST_EXISTING_TABLE_PARTITIONS
+PARTITION_OPTIONS   = MERGE
+END
+impdp system/manager@pdb1 parfile=$vdir_path/users_bench_IMP.par
+
+
+-- export the users to extract the passwords (does not work for SYS,SYSTEM)
+cat <<END > $vdir_path/users_EXP.par
+directory       =   my_data_pump_dir
+dumpfile        =   users%U.dmp
+logfile         =   users_EXP.log
+full            =   y
+include         =   user:"in ('SCOTT','SCOTT2')"
+parallel        =   2
+filesize        =   2G
+FLASHBACK_TIME  =   systimestamp
+END
+expdp system/manager@pdb1 parfile=$vdir_path/users_EXP.par
+
+-- generate the sql file containing saved user passwords
+cat <<END > $vdir_path/users_IMP.par
+directory   = my_data_pump_dir
+dumpfile    = users%U.dmp
+logfile     = users_IMP.log
+SQLFILE     = users.sql
+END
+impdp system/manager@pdb1 parfile=$vdir_path/users_IMP.par
+
+
+
+
+ALTER index MOVIE.SYS_C008228 rebuild tablespace movie_indx;
+ALTER index MOVIE.SYS_C008241 rebuild tablespace movie_indx;
+ALTER index MOVIE.INTERACTION_EVENT_T_IX1 rebuild partition P1        tablespace movie_indx parallel 2 online;
+ALTER index MOVIE.INTERACTION_EVENT_T_IX2 rebuild partition P1        tablespace movie_indx parallel 2 online;
+ALTER index MOVIE.INTERACTION_EVENT_T_IX1 modify default attributes tablespace movie_indx;
+ALTER index MOVIE.INTERACTION_EVENT_T_IX2 modify default attributes tablespace movie_indx;
+
+ALTER index MOVIE.PURCHASE_EVENT_T_IX1 rebuild partition P1        tablespace movie_indx parallel 2 online;
+ALTER index MOVIE.PURCHASE_EVENT_T_IX2 rebuild partition P1        tablespace movie_indx parallel 2 online;
+ALTER index MOVIE.PURCHASE_EVENT_T_IX1 modify default attributes tablespace movie_indx;
+ALTER index MOVIE.PURCHASE_EVENT_T_IX2 modify default attributes tablespace movie_indx;

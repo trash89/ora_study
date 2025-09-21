@@ -1,0 +1,139 @@
+-- same database SID as the target(source)
+
+-- on the primary server(o11g), check if the TDE is activated
+sqlplus / as sysdba <<END
+@show_tde10
+END
+
+o11g:DB11G:DB11G:SYS
+SQL> 
+dba_encrypted_columns
+Table							     COLUMN_NAME		    Encryption Alg		   Integrity Al
+------------------------------------------------------------ ------------------------------ ------------------------------ ------------
+TEST.TDE_TEST						     DATA			    AES 192 bits key		   SHA-1
+
+1 row SELECTed.
+
+
+v$encryption_wallet
+STATUS			       WRL_TYPE 	    WRL_PARAMETER
+------------------------------ -------------------- --------------------------------------------------------------------------------
+OPEN			       file		    /u01/app/oracle/admin/DB11G/encryption_keystore
+
+-- If TDE is activated on the database to be cloned, we have to create folders for the copy
+
+
+-- on the standby server (o11g2)
+
+-- remove old database
+rm -rf /u01/app/oracle/admin/DB11G/*
+rm -rf /u01/app/oracle/audit/DB11G/*
+rm -rf /u01/app/oracle/diag/rdbms/db11g*
+rm -rf /u01/app/oracle/flash_recovery_area/DB11G/*
+rm -rf /u02/oradata/DB11G/*
+rm -f $ORACLE_HOME/dbs/lkDB11G
+rm -f $ORACLE_HOME/dbs/orapwDB11G
+rm -f $ORACLE_HOME/dbs/initDB11G.ora
+rm -f $ORACLE_HOME/dbs/spfileDB11G.ora
+rm -f $ORACLE_HOME/dbs/hc_DB11G.dat
+rmdir /u01/app/oracle/admin/DB11G
+rmdir /u01/app/oracle/audit/DB11G
+rmdir /u01/app/oracle/diag/rdbms/db11g
+rmdir /u01/app/oracle/flash_recovery_area/DB11G
+rmdir /u02/oradata/DB11G
+
+-- re-create the folders
+mkdir -p /u01/app/oracle/admin/DB11G/adump
+mkdir -p /u01/app/oracle/admin/DB11G/wallet
+mkdir -p /u01/app/oracle/admin/DB11G/encryption_keystore
+mkdir -p /u01/app/oracle/audit/DB11G
+mkdir -p /u01/app/oracle/diag/rdbms/db11g/DB11G
+mkdir -p /u01/app/oracle/flash_recovery_area/DB11G/flashback
+mkdir -p /u02/oradata/DB11G/changetracking
+
+-- transfer the TDE keys
+
+scp oracle@o11g:/u01/app/oracle/admin/DB11G/walet/* oracle@o11g2:/u01/app/oracle/admin/DB11G/wallet
+
+scp oracle@o11g:/u01/app/oracle/admin/DB11G/encryption_keystore/* oracle@o11g2:/u01/app/oracle/admin/DB11G/encryption_keystore
+
+-- adjust the sqlnet.ora file like the primary server
+vi $ORACLE_HOME/network/admin/sqlnet.ora
+
+NAMES.DIRECTORY_PATH= (TNSNAMES, EZCONNECT)
+
+ENCRYPTION_WALLET_LOCATION=
+  (SOURCE=(METHOD=FILE)(METHOD_DATA=
+    (DIRECTORY=/u01/app/oracle/admin/DB11G/encryption_keystore/)))
+
+-- restart the listener
+
+lsnrctl stop
+lsnrctl start
+
+
+-- create the password file
+export ORACLE_SID=DB11G
+orapwd file=$ORACLE_HOME/dbs/orapwDB11G password=manager force=y
+
+-- Create an init.ora file
+
+echo "*.db_name='DB11G'"           >$ORACLE_HOME/dbs/initDB11G.ora
+echo "*.compatible='11.2.0.0.0'"  >>$ORACLE_HOME/dbs/initDB11G.ora
+
+sqlplus / as sysdba <<END
+startup nomount;
+create spfile FROM pfile;
+END
+
+-- if error: RMAN-05541: no archived logs found in target database, alter system switch logfile; on the primary
+
+rman target=sys/manager@o11g:1521/DB11G auxiliary=sys/manager@o11g2:1521/DB11G <<END
+run{
+ALLOCATE CHANNEL tgt1 TYPE DISK;
+ALLOCATE CHANNEL tgt2 TYPE DISK;
+ALLOCATE CHANNEL tgt3 TYPE DISK;
+ALLOCATE CHANNEL tgt4 TYPE DISK;
+ALLOCATE AUXILIARY CHANNEL dup1 TYPE DISK;
+ALLOCATE AUXILIARY CHANNEL dup2 TYPE DISK;
+ALLOCATE AUXILIARY CHANNEL dup3 TYPE DISK;
+ALLOCATE AUXILIARY CHANNEL dup4 TYPE DISK;
+DUPLICATE TARGET DATABASE TO DB11G
+FROM ACTIVE DATABASE 
+SPFILE
+PARAMETER_VALUE_CONVERT 
+    '/u01/app/oracle/admin/DB11G','/u01/app/oracle/admin/DB11G',
+    '/u01/app/oracle/flash_recovery_area/DB11G','/u01/app/oracle/flash_recovery_area/DB11G',
+    '/u02/oradata/DB11G', '/u02/oradata/DB11G'
+SET DB_FILE_NAME_CONVERT 
+    '/u02/oradata/DB11G', '/u02/oradata/DB11G'
+SET LOG_FILE_NAME_CONVERT 
+    '/u02/oradata/DB11G', '/u02/oradata/DB11G'
+NOFILENAMECHECK;
+}
+END
+
+-- enable flashback and block change tracking
+sqlplus / as sysdba <<END
+shutdown immediate;
+startup mount;
+alter database disable block change tracking;
+alter database enable block change tracking;
+alter database flashback off;
+alter database flashback on;
+alter database open;
+END
+
+
+-- if error, run alter system switch logfile; on the target(source)
+RMAN-03002: failure of Duplicate Db command at 01/28/2025 14:24:23
+RMAN-05541: no archived logs found in target database
+
+
+-- Test the TDE
+o11g2:DB11G:DB11G:SYS
+SQL> SELECT * FROM test.tde_test;
+
+	ID DATA
+---------- --------------------------------------------------
+	 1 This is a secret!

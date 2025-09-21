@@ -1,0 +1,188 @@
+Install Oracle GoldenGate Version 12.3.0.1.4 OGGCORE_12.3.0.1.0_PLATFORMS_180415.0359_FBO
+
+-- 12.3 classic architecture
+mkdir -p /u01/app/oracle/product/gg
+
+Install Oracle GoldenGate Version 23.4.1.24.05 OGGCORE_23.4.0.0.0OGGR_LINUX.X64_240529.0500_FBO
+
+-- 23ai microservices architecture
+mkdir -p /u01/app/oracle/product/gg23
+
+
+-- add to $HOME/.bash_profile
+# classic archi
+#export OGG_HOME=/u01/app/oracle/product/gg
+
+# microservices archi
+# 23ai ma
+export OGG_HOME=/u01/app/oracle/product/gg23
+export OGG_ETC_HOME=/home/oracle/depl1/etc
+export OGG_VAR_HOME=/home/oracle/depl1/var
+
+export PATH=$OGG_HOME:$OGG_HOME/bin:$PATH
+export LD_LIBRARY_PATH=$OGG_HOME:$OGG_HOME/lib:$LD_LIBRARY_PATH
+
+
+
+
+-- start and stop ServiceManager 23ai
+systemctl start OracleGoldenGate
+systemctl status OracleGoldenGate
+systemctl stop OracleGoldenGate
+
+
+
+Service Manager depl1           5001
+------------------------------------
+Deployment udepl1
+------------------------------------
+Administration Server           5002
+Distribution Server             5003
+Receiver Server                 5004
+Performance Metrics Server      5005
+
+
+sqlplus / as sysdba  <<END
+startup;
+alter system set enable_goldengate_replication=true scope=both;
+ALTER SYSTEM SET STREAMS_POOL_SIZE=1G scope=both;
+alter database force logging;
+alter database add supplemental log data (primary key,unique,foreign key,all) columns;
+create pfile FROM spfile;
+END
+
+
+-- on multitenant database (cdb1)
+create tablespace gg_data datafile '/u02/oradata/cdb1/gg_data01.dbf' size 1m autoextend on next 1m;
+-- create the same tabelspace in pdb
+create tablespace gg_data datafile '/u02/oradata/cdb1/pdb1/gg_data01.dbf' size 1m autoextend on next 1m;
+
+sqlplus / as sysdba << END
+CREATE USER c##ggs_owner IDENTIFIED BY manager CONTAINER=all DEFAULT TABLESPACE gg_data TEMPORARY TABLESPACE temp;
+GRANT CONNECT,RESOURCE,DBA      TO c##ggs_owner CONTAINER=all;
+GRANT CREATE SESSION            TO c##ggs_owner CONTAINER=all;
+GRANT CREATE VIEW               TO c##ggs_owner CONTAINER=all;
+GRANT CREATE TABLE              TO c##ggs_owner CONTAINER=all;
+GRANT ALTER SYSTEM              TO c##ggs_owner CONTAINER=all;
+GRANT ALTER USER                TO c##ggs_owner CONTAINER=all;
+GRANT SELECT ANY DICTIONARY     TO c##ggs_owner CONTAINER=all;
+GRANT SELECT ANY TRANSACTION    TO c##ggs_owner CONTAINER=all;
+ALTER USER c##ggs_owner SET CONTAINER_DATA=all CONTAINER=current;
+ALTER USER c##ggs_owner QUOTA unlimited ON users;
+EXEC DBMS_GOLDENGATE_AUTH.GRANT_ADMIN_PRIVILEGE('c##ggs_owner',container => 'ALL');
+rem GRANT DV_GOLDENGATE_ADMIN; –-- for data vault user
+rem GRANT DV_GOLDENGATE_REDO_ACCESS; –-- for data vault user
+END
+
+
+-- on multitenant database: only in pdb on both servers
+sqlplus / as sysdba << END
+ALTER SESSION SET CONTAINER=pdb1;
+CREATE USER ggs_owner IDENTIFIED BY ggs_owner CONTAINER=CURRENT;
+GRANT CONNECT,RESOURCE,DBA      TO ggs_owner CONTAINER=CURRENT;
+GRANT CREATE SESSION            TO ggs_owner CONTAINER=CURRENT;
+EXEC DBMS_GOLDENGATE_AUTH.GRANT_ADMIN_PRIVILEGE('ggs_owner');
+END
+
+-- on non-multitenant database (ORCL)
+sqlplus / as sysdba << END
+create tablespace gg_data datafile '/u02/oradata/ORCL/gg_data01.dbf' size 1m autoextend on next 1m;
+CREATE USER ggs_owner IDENTIFIED BY ggs_owner default tablespace gg_data temporary tablespace temp;
+GRANT CONNECT,RESOURCE,DBA      TO ggs_owner;
+GRANT CREATE SESSION            TO ggs_owner;
+EXEC DBMS_GOLDENGATE_AUTH.GRANT_ADMIN_PRIVILEGE('ggs_owner');
+END
+
+-- integrate the DDL support in the appliances, for multitenant and non-multitenant databases
+-- configure DDL Synchronization for non-multitenant database
+-- for multitenant databases, run the scripts after switching to pdb FROM sys, and give C##GGS_OWNER as owner, see bellow:
+cd $OGG_HOME
+sqlplus / as sysdba << END
+alter session set container=pdb1;
+@sequence
+Please enter the name of a schema for the GoldenGate database objects:
+C##GGS_OWNER
+ALTER TABLE sys.seq$ ADD SUPPLEMENTAL LOG DATA (PRIMARY KEY) COLUMNS;
+END
+
+-- for GoldenGate 23ai, for the sequence replication, the script to install in ggs_owner is 
+@$OGG_HOME/lib/sql/legacy/sequence.sql
+
+-- for GoldenGate 12.3 
+cd $OGG_HOME
+-- if no dedicated tablespace is setup for the user GGS_OWNER, export the variable (if his default tablespace is USERS, by example)
+export ALLOW_SHARED_TABLESPACE=TRUE
+sqlplus / as sysdba
+@marker_setup
+Enter Oracle GoldenGate schema name:GGS_OWNER
+
+alter session set recyclebin=OFF;
+
+@ddl_setup
+Enter Oracle GoldenGate schema name:GGS_OWNER
+
+@role_setup
+Enter GoldenGate schema name:GGS_OWNER
+
+grant ggs_ggsuser_role to ggs_owner;
+
+@ddl_enable
+
+@ddl_pin GGS_OWNER
+
+@sequence
+Please enter the name of a schema for the GoldenGate database objects:
+ggs_owner
+Setting schema name to GGS_OWNER
+
+ALTER TABLE sys.seq$ ADD SUPPLEMENTAL LOG DATA (PRIMARY KEY) COLUMNS;
+
+exit
+
+
+-- in classic architecture
+Add Heartbeat table
+
+-- in GLOBALS - on multitenant database (cdb1)
+GGSCHEMA GGS_OWNER
+CHECKPOINTTABLE cdb$root.c##GGS_OWNER.CHKPTAB
+
+-- in GLOBALS - on non-multitenant database (ORCL)
+GGSCHEMA GGS_OWNER
+CHECKPOINTTABLE GGS_OWNER.CHKPTAB
+
+
+-- Create the checkpoint table
+cd $OGG_HOME
+ggsci
+
+-- on multitenant database (cdb1)
+DBLOGIN USERID ggs_owner@pdb1, PASSWORD ggs_owner
+ADD CHECKPOINTTABLE pdb1.GGS_OWNER.CHKPTAB
+
+-- on non-multitenant database (ORCL)
+DBLOGIN USERID ggs_owner, PASSWORD ggs_owner
+ADD CHECKPOINTTABLE GGS_OWNER.CHKPTAB
+
+
+-- in Microservices architecture
+http://o12c:5001
+http://o12c2:5001
+
+ggma/s**
+
+adminclient
+connect http://o12c:5001 as ggma
+alter credentialstore add user c##ggs_owner@o12c:1521/cdb1 password manager alias ggs_owner_aliasc
+dblogin useridalias ggs_owner_aliasc
+add checkpointtable cdb$root.c##GGS_OWNER.CHKPTAB
+dblogin useridalias ggs_owner_alias
+add heartbeattable
+
+
+-- on both servers: Add database connections (DB Connections)
+Credential Domain : OracleGoldenGate
+Credential Alias : ggs_owner_alias
+User ID : ggs_owner@o12c:1521/pdb1
+User ID : ggs_owner@o12c2:1521/pdb1
+Password : ggs_owner

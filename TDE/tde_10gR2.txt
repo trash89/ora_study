@@ -1,0 +1,248 @@
+export TNS_ADMIN=$ORACLE_HOME/network/admin 
+
+mkdir -p $ORACLE_BASE/admin/$ORACLE_SID/encryption_keystore/
+
+vi $ORACLE_HOME/network/admin/sqlnet.ora
+
+NAMES.DIRECTORY_PATH= (TNSNAMES, EZCONNECT, ONAMES, HOSTNAME)
+
+ENCRYPTION_WALLET_LOCATION=
+  (SOURCE=(METHOD=FILE)(METHOD_DATA=
+    (DIRECTORY=/u01/app/oracle/admin/TSH1/encryption_keystore/)))
+
+
+lsnrctl reload
+
+lsnrctl stop
+lsnrctl start
+
+
+sqlplus / as sysdba << END
+shutdown immediate;
+startup;
+END
+
+
+sqlplus / as sysdba
+@show_tde10
+v$encryption_wallet
+STATUS			       WRL_TYPE 	    WRL_PARAMETER
+------------------------------ -------------------- --------------------------------------------------------------------------------
+CLOSED			       file		    /u01/app/oracle/admin/TSH1/encryption_keystore/
+
+
+ALTER SYSTEM SET ENCRYPTION KEY AUTHENTICATED BY "myPassword";
+host ls /u01/app/oracle/admin/TSH1/encryption_keystore/
+ewallet.p12
+
+@show_tde10
+v$encryption_wallet
+STATUS			       WRL_TYPE 	    WRL_PARAMETER
+------------------------------ -------------------- --------------------------------------------------------------------------------
+OPEN			       file		    /u01/app/oracle/admin/TSH1/encryption_keystore/
+
+shutdown immediate
+startup 
+
+@show_tde10
+v$encryption_wallet
+STATUS			       WRL_TYPE 	    WRL_PARAMETER
+------------------------------ -------------------- --------------------------------------------------------------------------------
+CLOSED			       file		    /u01/app/oracle/admin/TSH1/encryption_keystore/
+
+
+-- Wallets must be reopened after an instance restart and can be closed to prevent access to encrypted columns.
+-- opening the wallet
+ALTER SYSTEM SET ENCRYPTION WALLET OPEN AUTHENTICATED BY "myPassword";
+
+@show_tde10
+v$encryption_wallet
+STATUS			       WRL_TYPE 	    WRL_PARAMETER
+------------------------------ -------------------- --------------------------------------------------------------------------------
+OPEN			       file		    /u01/app/oracle/admin/TSH1/encryption_keystore/
+
+-- closing
+ALTER SYSTEM SET ENCRYPTION WALLET CLOSE;
+
+@show_tde10
+v$encryption_wallet
+STATUS			       WRL_TYPE 	    WRL_PARAMETER
+------------------------------ -------------------- --------------------------------------------------------------------------------
+CLOSED			       file		    /u01/app/oracle/admin/TSH1/encryption_keystore/
+
+
+-- opening the wallet
+ALTER SYSTEM SET ENCRYPTION WALLET OPEN AUTHENTICATED BY "myPassword";
+
+CREATE TABLESPACE tde_test DATAFILE '/u02/oradata/TSH1/tde_test.dbf' SIZE 1M AUTOEXTEND ON NEXT 1M;
+
+CREATE USER test IDENTIFIED BY test DEFAULT TABLESPACE tde_test temporary tablespace temp;
+ALTER USER test QUOTA UNLIMITED ON tde_test;
+GRANT CONNECT TO test;
+GRANT CREATE TABLE TO test;
+
+-- Encrypted Column
+
+-- Create a test table with an encrypted column and insert some data. 
+-- Using the ENCRYPT clause on its own is the same as using the ENCRYPT USING 'AES192' clause, as AES192 is the default encryption method.
+
+CONN test/test
+
+DROP TABLE tde_test;
+PURGE RECYCLEBIN;
+
+CREATE TABLE tde_test (
+  id    NUMBER(10),
+  data  VARCHAR2(50) ENCRYPT
+)
+TABLESPACE tde_test;
+
+INSERT INTO tde_test (id, data) VALUES (1, 'This is a secret!');
+COMMIT;
+
+CONN / AS SYSDBA
+ALTER SYSTEM FLUSH BUFFER_CACHE;
+
+shutdown immediate;
+startup;
+
+SQL> SELECT * FROM test.tde_test;
+SELECT * FROM test.tde_test
+                   *
+ERROR at line 1:
+ORA-28365: wallet is not open
+
+conn / as sysdba
+ALTER SYSTEM SET ENCRYPTION WALLET OPEN IDENTIFIED BY "myPassword";
+
+SQL> SELECT * FROM test.tde_test;
+
+	ID DATA
+---------- --------------------------------------------------
+	 1 This is a secret!
+
+-- External Tables
+-- External tables can be encrypted in a similar way to regular tables. 
+-  First, we make sure the default data pump directory is available to the test user.
+
+CONN / AS SYSDBA
+GRANT READ, WRITE ON DIRECTORY data_pump_dir TO test;
+
+-- Next, we create the external table as a copy of an existing table, using the ENCRYPT clause.
+
+CONN test/test
+
+CREATE TABLE tde_test_ext (
+  id,
+  data ENCRYPT IDENTIFIED BY "myPassword"
+)
+ORGANIZATION EXTERNAL
+(
+  TYPE ORACLE_DATAPUMP
+  DEFAULT DIRECTORY data_pump_dir
+  location ('tde_test_ext.dmp')
+)
+AS
+SELECT id,
+       data
+FROM   tde_test;
+
+
+-- Rekeying an encrypted table
+alter table test.tde_test rekey;
+
+
+-- Resetting the Master Key
+-- Use the Oracle Wallet Manager (owm) to change the password and convert the wallet into an autologin wallet.
+
+-- After enabling the auto login for the wallet with owm, the sso file is created
+ls -lrt /u01/app/oracle/admin/TSH1/encryption_keystore/
+-rw------- 1 oracle oinstall 1309 Feb  6 11:23 ewallet.p12
+-rw------- 1 oracle oinstall 1337 Feb  6 11:23 cwallet.sso
+
+-- Create autologin for the key store.
+orapki wallet create -wallet /u01/app/oracle/admin/TSH1/encryption_keystore/ -pwd "myPassword" -auto_login
+ls -lrt /u01/app/oracle/admin/TSH1/encryption_keystore/
+-rw------- 1 oracle oinstall 1309 Feb  6 11:23 ewallet.p12
+-rw------- 1 oracle oinstall 1338 Feb  6 11:28 cwallet.sso
+
+-- Display the wallet contents
+orapki wallet display -wallet /u01/app/oracle/admin/TSH1/encryption_keystore/ -pwd "myPassword"
+Requested Certificates: 
+Subject:        CN=oracle
+User Certificates:
+Oracle Secret Store entries: 
+ORACLE.SECURITY.DB.ENCRYPTION.AWBjjUdWC08Hv8+KTHKf4zYAAAAAAAAAAAAAAAAAAAAAAAAAAAAA
+ORACLE.SECURITY.DB.ENCRYPTION.MASTERKEY
+Trusted Certificates: 
+
+
+-- Data Pump Export and Import with Encryption
+
+-- Exporting
+-- Even when TDE is setup if encryption parameters are not used in expdp, the resulting dump file will be unencrypted.
+expdp system/manager directory=DATA_PUMP_DIR dumpfile=test.dmp schemas=test
+
+strings /u01/app/oracle/product/10.2.0/db_1/rdbms/log/test.dmp | grep secret*
+This is a secret!
+
+-- To encrypt an export use encryption_mode and encryption paramters.
+expdp system/manager directory=DATA_PUMP_DIR dumpfile=test2.dmp schemas=test ENCRYPTION_PASSWORD="myEncryptionPassword"
+-- The resulting dump file is encrypted.
+strings /u01/app/oracle/admin/orcl/dpdump/test2.dmp | grep secret*
+
+sqlplus / as sysdba << END
+drop user test cascade;
+END
+
+-- Importing
+-- To import FROM an encrypted, simply run the import command as usual provided TDE is setup and wallet is open.
+impdp system/manager directory=DATA_PUMP_DIR dumpfile=test2.dmp schemas=test ENCRYPTION_PASSWORD="myEncryptionPassword"
+
+-- RMAN Backup with Encryption
+-- There are multiple ways to enable encryption for backups. The easiest and simplest way is to configure default rman configuration to use encryption.
+rman target=/ << END
+CONFIGURE ENCRYPTION FOR DATABASE ON;
+CONFIGURE ENCRYPTION ALGORITHM 'AES256';
+END
+
+-- This will make every backup run an encrypted backup.
+RMAN> backup datafile 5 tag='default backup';
+
+TAG                              ENC
+-------------------------------- ---
+DEFAULT BACKUP                   YES
+This could be overriden with set encryption.
+RMAN> set encryption off;
+RMAN> backup datafile 5 tag='enc off';
+
+TAG                              ENC
+-------------------------------- ---
+ENC OFF                          NO
+If an tablespace is already encrypted and backup taken is an encrypted backup then the encrypted blocks are passed through to backup unchnaged. 
+Only the unencrypted blocks are encrypted during backup.
+
+
+
+
+
+
+
+
+Add encrypted column to existing table:
+ALTER TABLE table_name ADD (column_name datatype ENCRYPT);
+
+Create table and encrypt column:
+CREATE TABLE <table_name> (column_name datatype ENCRYPT);
+
+Encrypt unencrypted existing column:
+ALTER TABLE table_name MODIFY (column_name ENCRYPT);
+
+Master key: set or reset: (use owm)
+ALTER SYSTEM SET ENCRYPTION KEY IDENTIFIED BY <password>;
+
+Master key: set or reset to use PKI certificate:
+ALTER SYSTEM SET ENCRYPTION KEY <certificate_ID> IDENTIFIED BY <password>;
+
+Wallet: open to access master keys:
+ALTER SYSTEM SET ENCRYPTION WALLET OPEN IDENTIFIED BY <password>;

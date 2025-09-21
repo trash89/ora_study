@@ -1,0 +1,170 @@
+-- non-multitenant databases (ORCL)
+
+-- different database SID FROM the target(source)
+
+-- on the source server (o19cs), change the SYS and SYSTEM password
+
+sqlplus / as sysdba <<END
+alter user sys identified by "manager123*";
+alter user system identified by "manager123*";
+END
+
+-- verify if TDE is in place for the source database
+sqlplus / as sysdba<<END
+@show_tde
+END
+
+o19cs:ORCL:ORCL:SYS
+SQL> 
+dba_encrypted_columns
+Table							     COLUMN_NAME		    Encryption Alg		   Integrity Al
+------------------------------------------------------------ ------------------------------ ------------------------------ ------------
+TEST.TDE_TEST						     DATA			    AES 192 bits key		   SHA-1
+
+1 row selected.
+
+
+v$encryption_wallet
+Con STATUS			   WRL_TYPE		WALLET_TYPE	     W order   Backuped  WRL_PARAMETER
+--- ------------------------------ -------------------- -------------------- --------- --------- --------------------------------------------------------------------------------
+  0 OPEN			   FILE 		AUTOLOGIN	     SINGLE    NO	 /u01/app/oracle/admin/ORCL/encryption_keystore/tde/
+
+v$encryption_keys
+Con KEY_ID								   TAG				  USER				 KEY_USE    KEYSTORE_TYPE     BACKED_UP
+--- ---------------------------------------------------------------------- ------------------------------ ------------------------------ ---------- ----------------- ---------
+  0 AapoT7QwXE9evw4nK6kEmSkAAAAAAAAAAAAAAAAAAAAAAAAAAAAA		   master key			  SYS				 TDE	    SOFTWARE KEYSTORE NO
+
+Creation Time	    Activation Time	Creator:DBNAME/PDBNAME				   Activating:DBNAME/PDBNAME
+------------------- ------------------- -------------------------------------------------- --------------------------------------------------
+06/03/2025 05:22:05 06/03/2025 05:22:05 ORCL/						   ORCL/
+
+1 row selected.
+
+
+sys.x$kcbdbk, if mkloc == 0, no encryption enabled
+Con	 MKLOC
+--- ----------
+  0	     1
+
+
+-- remove old database
+rm -rf /u01/app/oracle/admin/ORCL/*
+rm -rf /u01/app/oracle/audit/ORCL/*
+rm -rf /u01/app/oracle/diag/rdbms/orcl/*
+rm -rf /u01/app/oracle/recovery_area/ORCL/*
+rm -f $ORACLE_HOME/dbs/lkORCL
+rm -f $ORACLE_HOME/dbs/orapwORCL
+rm -f $ORACLE_HOME/dbs/initORCL.ora
+rm -f $ORACLE_HOME/dbs/snapcf_ORCL.f
+rm -f $ORACLE_HOME/dbs/spfileORCL.ora
+rm -f $ORACLE_HOME/dbs/hc_ORCL.dat
+rm -f $ORACLE_HOME/rdbms/log/*ORCL*
+rm -rf /u02/oradata/ORCL/*
+rmdir /u01/app/oracle/admin/ORCL
+rmdir /u01/app/oracle/audit/ORCL
+rmdir /u01/app/oracle/diag/rdbms/orcl
+rmdir /u01/app/oracle/recovery_area/ORCL
+rmdir /u02/oradata/ORCL
+
+-- re-create the folders
+mkdir -p /u01/app/oracle/admin/LCRO2/adump
+mkdir -p /u01/app/oracle/admin/LCRO2/wallet
+mkdir -p /u01/app/oracle/admin/LCRO2/xdb_wallet
+mkdir -p /u01/app/oracle/admin/LCRO2/encryption_keystore/tde
+mkdir -p /u01/app/oracle/audit/LCRO2
+mkdir -p /u01/app/oracle/diag/rdbms/lcro2/LCRO2
+mkdir -p /u01/app/oracle/recovery_area/LCRO2/flashback
+mkdir -p /u02/oradata/LCRO2/changetracking
+
+-- re-create the audit folder for the original database
+mkdir -p /u01/app/oracle/admin/ORCL/adump
+
+-- transfer the TDE keys
+
+scp oracle@o19cs:/u01/app/oracle/admin/ORCL/wallet/* oracle@o19cs2:/u01/app/oracle/admin/LCRO2/wallet
+
+scp oracle@o19cs:/u01/app/oracle/admin/ORCL/xdb_wallet/* oracle@o19cs2:/u01/app/oracle/admin/LCRO2/xdb_wallet
+
+scp oracle@o19cs:/u01/app/oracle/admin/ORCL/encryption_keystore/tde/* oracle@o19cs2:/u01/app/oracle/admin/LCRO2/encryption_keystore/tde
+
+-- add a static registration of the service LCRO in the listener.ora and restart the listener
+vi $ORACLE_HOME/network/admin/listener.ora
+
+SID_LIST_LISTENER =
+  (SID_LIST =
+    (SID_DESC =
+      (GLOBAL_DBNAME = CDB1)
+      (ORACLE_HOME = /u01/app/oracle/product/19.0.0/dbhome_1)
+      (SID_NAME = cdb1)
+      (ENVS="TNS_ADMIN=/u01/app/oracle/product/19.0.0/dbhome_1/network/admin")
+    )
+    (SID_DESC =
+      (GLOBAL_DBNAME = CDB1_DGMGRL)
+      (ORACLE_HOME = /u01/app/oracle/product/19.0.0/dbhome_1)
+      (SID_NAME = cdb1)
+      (ENVS="TNS_ADMIN=/u01/app/oracle/product/19.0.0/dbhome_1/network/admin")
+    )
+    (SID_DESC =
+      (GLOBAL_DBNAME = ORCL)
+      (ORACLE_HOME = /u01/app/oracle/product/19.0.0/dbhome_1)
+      (SID_NAME = ORCL)
+      (ENVS="TNS_ADMIN=/u01/app/oracle/product/19.0.0/dbhome_1/network/admin")
+    )
+    (SID_DESC =
+      (GLOBAL_DBNAME = LCRO2)
+      (ORACLE_HOME = /u01/app/oracle/product/19.0.0/dbhome_1)
+      (SID_NAME = LCRO2)
+      (ENVS="TNS_ADMIN=/u01/app/oracle/product/19.0.0/dbhome_1/network/admin")
+    )
+  )
+
+lsnrctl stop
+lsnrctl start
+
+export ORACLE_SID=LCRO2
+orapwd file=$ORACLE_HOME/dbs/orapwLCRO2 password=manager123* force=y
+
+-- Create an init.ora file
+
+echo "*.db_name='LCRO2'"         >$ORACLE_HOME/dbs/initLCRO2.ora
+echo "*.compatible='19.3.0'"    >>$ORACLE_HOME/dbs/initLCRO2.ora
+
+sqlplus / as sysdba <<END
+startup nomount;
+create spfile FROM pfile;
+END
+
+rman target=sys/manager123*@o19cs:1521/ORCL auxiliary=sys/manager123*@o19cs2:1521/LCRO2 <<END
+run{
+ALLOCATE CHANNEL tgt1 TYPE DISK;
+ALLOCATE CHANNEL tgt2 TYPE DISK;
+ALLOCATE CHANNEL tgt3 TYPE DISK;
+ALLOCATE CHANNEL tgt4 TYPE DISK;
+ALLOCATE AUXILIARY CHANNEL dup1 TYPE DISK;
+ALLOCATE AUXILIARY CHANNEL dup2 TYPE DISK;
+ALLOCATE AUXILIARY CHANNEL dup3 TYPE DISK;
+ALLOCATE AUXILIARY CHANNEL dup4 TYPE DISK;
+DUPLICATE TARGET DATABASE TO LCRO2
+FROM ACTIVE DATABASE 
+SPFILE
+PARAMETER_VALUE_CONVERT 
+    '/u01/app/oracle/admin/ORCL','/u01/app/oracle/admin/LCRO2',
+    '/u01/app/oracle/recovery_area/ORCL','/u01/app/oracle/recovery_area/LCRO2',
+    '/u02/oradata/ORCL', '/u02/oradata/LCRO2'
+SET DB_FILE_NAME_CONVERT 
+    '/u02/oradata/ORCL', '/u02/oradata/LCRO2'
+SET LOG_FILE_NAME_CONVERT 
+    '/u02/oradata/ORCL', '/u02/oradata/LCRO2'
+USING COMPRESSED BACKUPSET
+SECTION SIZE 1G
+NOFILENAMECHECK;
+}
+END
+
+-- Test the TDE
+o19cs2:LCRO2:LCRO2:SYS
+SQL> SELECT * FROM test.tde_test;
+
+	ID DATA
+---------- --------------------------------------------------
+	 1 This is a secret!

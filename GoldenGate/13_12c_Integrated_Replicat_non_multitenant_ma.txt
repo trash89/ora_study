@@ -1,0 +1,337 @@
+https://gavinsoorma.com.au/knowledge-base/goldengate-12c-new-feature-integrated-replicat/
+
+One of the new features in Goldengate 12c is the Integrated Replicated or Integrated Apply feature.
+
+Note that Integrated Extract was introduced in GoldenGate 11g  to go along with what is now termed as Classic Extract.
+
+Keep in mind that to use Integrated Replicat the target database needs to be version 11.2.0.4 or later and this feature cannot be used 
+if the target database is non-Oracle.
+
+Integrated Replicat is useful in case of heavy workloads WHERE additional parallel apply processes are created and co-ordinated automatically 
+enabling transactions to be applied in parallel without any changes being done to the replicat parameter file.
+
+The Replicat process reads the trail file and then constructs logical change records (LCRs) which are then transmitted to the database 
+using what is known as a Lightweight Streaming API.
+
+A number of database apply processes are created each with their own function:
+
+Receiver: Reads LCRs
+Preparer: Computes the dependencies between the transactions (primary key, unique indexes, foreign key) , grouping transactions and sorting 
+in dependency order.
+Coordinator: Coordinates transactions, maintains the order between applier processes.
+Applier:  Performs changes for assigned transactions, including conflict detection and error handling
+The integrated replicat has autotuning based on workload.  Based on the number of LCRs being processed, additional parallel apply processes 
+are added or removed .
+
+This is controlled via two parameters in the replicat parameter file – PARALLELISM and MAX_PARALLELISM .
+
+PARALLELISM is the minimum number of parallel apply processes. Default is 4.
+
+MAX_PARALLELISM is the maximum number of apply servers.  Default is 30.
+
+GoldenGate will automatically increase and decrease the number of apply servers based on workload using MAX_PARALLELISM parameter.
+
+Integrated Replicat does not require a checkpoint table to be set up as in the case of the conventional or classic replicat which we used 
+in earlier GoldenGate versions.
+
+The START REPLICAT command automatically registers the integrated replicat with the target Oracle database.
+
+Integrated Replicat applies transactions asynchronously.
+
+Transactions that do not have inter-dependencies can be safely executed and committed out of order to achieve fast throughput. 
+Transactions with dependencies are guaranteed to be applied in the same order as on the source.
+
+The integrated replicat requires the source extract parameter file to contain these new parameters 
+introduced in 12c - LOGALLSUPCOLS and UPDATERECORDFORMAT COMPACT.
+
+From the documentation:
+
+LOGALLSUPCOLS causes Extract to do the following with these supplementally logged columns:
+
+Automatically includes in the trail record the before image for UPDATE operations.
+Automatically includes in the trail record the before image of all supplementally logged columns for both UPDATE and DELETE operations
+UPDATERECORDFORMAT
+
+By default, when Extract is configured to generate before images, the before image is stored in a separate record 
+FROM the after image in the trail.
+
+When two records are generated for an update to a single row, it incurs additional disk I/O and processing for both Extract and Replicat. 
+If supplemental logging is enabled on all columns, the unmodified columns may be repeated in both the the before and after records. 
+The overall size of the trail is larger, as well. This overhead is reduced by using UPDATERECORDFORMAT.
+
+When UPDATERECORDFORMAT is used, Extract writes the before and after images to a single record that contains all of the information needed 
+to process an UPDATE operation.
+
+
+
+-- on Oracle GoldenGate Version 23.4.1.24.05 OGGCORE_23.4.0.0.0OGGR_LINUX.X64_240529.0500_FBO
+
+-- on source server (o12c)
+sqlplus / as sysdba << END
+drop user scott cascade;
+create user scott identified by tiger default tablespace users;
+grant connect,resource,unlimited tablespace to scott;
+CREATE TABLE scott.myobjects as SELECT * FROM all_objects WHERE 0=1;
+create sequence scott.seq1 start with 1 increment by 1 nocycle;
+END
+
+-- on target server (o12c2)
+sqlplus / as sysdba << END
+drop user scott cascade;
+create user scott identified by tiger default tablespace users;
+grant connect,resource,unlimited tablespace to scott;
+CREATE TABLE scott.myobjects as SELECT * FROM all_objects WHERE 0=1;
+create sequence scott.seq1 start with 1 increment by 1 nocycle;
+END
+
+
+-- on source server (o12c)
+adminclient
+connect http://o12c:5001 user ggma
+start deployment udepl1
+connect http://o12c:5001 user ggma
+
+-- create the aliases for database and network
+alter credentialstore add user ggs_owner@o12c:1521/ORCL password ggs_owner alias ggs_owner_alias
+alter credentialstore add user ggma alias ggma_alias domain Network password slayer
+
+-- login to database, create heartbeattable, checkpointtable and trandata for schema SCOTT
+dblogin useridalias ggs_owner_alias
+add heartbeattable
+ADD CHECKPOINTTABLE GGS_OWNER.CHKPTAB
+ADD SCHEMATRANDATA scott ALLCOLS PREPARECSN NOWAIT
+
+
+dblogin useridalias ggs_owner_alias
+
+ADD EXTRACT intext INTEGRATED TRANLOG, BEGIN NOW
+
+EDIT PARAMS intext
+
+-- LOGALLSUPCOLS and UPDATERECORDFORMAT COMPACT
+EXTRACT intext
+useridalias ggs_owner_alias
+LOGALLSUPCOLS
+UPDATERECORDFORMAT COMPACT
+TRANLOGOPTIONS ENABLE_AUTO_CAPTURE INTEGRATEDPARAMS (MAX_SGA_SIZE 100)
+EXTTRAIL lt
+DDL INCLUDE all
+DDLOPTIONS REPORT
+TABLE scott.*;
+SEQUENCE scott.*;
+
+ADD EXTTRAIL lt, EXTRACT intext
+
+REGISTER EXTRACT intext DATABASE
+
+
+start extract intext
+info extract intext
+view report intext
+
+info all
+
+
+
+-- old protocol ogg
+-- ADD DISTPATH ltrt SOURCE trail://o12c:5003/services/v2/sources?trail=lt target ogg://o12c2:5004/services/v2/targets?trail=rt
+
+ADD DISTPATH ltrt SOURCE trail://o12c:5003/services/v2/sources?trail=lt target ws://o12c2:5004/services/v2/targets?trail=rt authentication useridalias ggma_alias domain Network
+
+START DISTPATH ltrt
+info distpath ltrt
+
+-- on target server (o12c2)
+
+adminclient
+connect http://o12c2:5001 user ggma
+start deployment udepl1
+connect http://o12c2:5001 user ggma
+
+-- create the aliases database and network
+alter credentialstore add user ggs_owner@o12c2:1521/ORCL password ggs_owner alias ggs_owner_alias
+-- not required, only for equivalet config between o12c and o12c2
+alter credentialstore add user ggma alias ggma_alias domain Network password slayer
+
+-- login to pdb database, create heartbeattable, checkpointtable and trandata for schema SCOTT
+dblogin useridalias ggs_owner_alias
+add heartbeattable
+ADD CHECKPOINTTABLE GGS_OWNER.CHKPTAB
+ADD SCHEMATRANDATA scott ALLCOLS PREPARECSN NOWAIT
+
+
+dblogin useridalias ggs_owner_alias
+
+-- Create the Replicat group
+ADD REPLICAT rep1, INTEGRATED EXTTRAIL rt
+
+-- Create the parameter file for the Replicat group
+EDIT PARAMS rep1
+
+REPLICAT rep1
+DISCARDFILE REP1.dsc, PURGE, MEGABYTES 4000
+ASSUMETARGETDEFS
+useridalias ggs_owner_alias
+DBOPTIONS INTEGRATEDPARAMS(parallelism 6)
+DDL INCLUDE all
+DDLERROR default discard
+REPERROR (default,discard)
+DDLOPTIONS REPORT
+MAP scott.*, TARGET scott.*;
+
+
+start replicat rep1
+info replicat rep1
+view report rep1
+
+
+
+-- queries
+o12c2:ORCL:ORCL:SYS
+SQL> SELECT REPLICAT_NAME,SERVER_NAME FROM DBA_GOLDENGATE_INBOUND;
+
+REPLICAT_NAME	     SERVER_NAME
+-------------------- --------------------
+REP1		     OGG$REP1
+
+
+o12c2:ORCL:ORCL:SYS
+SQL> SELECT  APPLY_NAME,QUEUE_NAME,status FROM dba_apply;
+
+APPLY_NAME	     QUEUE_NAME 	  STATUS
+-------------------- -------------------- --------
+OGG$REP1	     OGGQ$REP1		  ENABLED
+
+
+o12c2:ORCL:ORCL:SYS
+SQL> SELECT apply_name,state FROM V$GG_APPLY_COORDINATOR ;
+
+APPLY_NAME	     STATE
+-------------------- ---------------------
+OGG$REP1	     IDLE
+
+
+o12c2:ORCL:ORCL:SYS
+SQL> SELECT server_id,TOTAL_MESSAGES_APPLIED FROM V$GG_APPLY_SERVER WHERE apply_name= 'OGG$REP1';
+
+ SERVER_ID TOTAL_MESSAGES_APPLIED
+---------- ----------------------
+	 7			0
+	 1			9
+	 3		   18
+	 5			0
+	 4			0
+	 2		   39
+	 6			0
+
+
+-- test 
+
+-- on source server (o12c)
+
+o12c:ORCL:ORCL:SYS
+SQL> SELECT count(*) FROM scott.myobjects;
+
+  COUNT(*)
+----------
+	 0
+
+o12c:ORCL:ORCL:SYS
+SQL> insert into scott.myobjects SELECT * FROM all_objects;
+
+71745 rows created.
+
+o12c:ORCL:ORCL:SYS
+SQL> commit;
+
+Commit complete.
+
+o12c:ORCL:ORCL:SYS
+SQL> create table scott.myobjects2 as SELECT * FROM all_objects WHERE owner!='SYS';
+
+Table created.
+
+o12c:ORCL:ORCL:SYS
+SQL> SELECT scott.seq1.nextval FROM dual;
+
+   NEXTVAL
+----------
+	 1
+
+o12c:ORCL:ORCL:SYS
+SQL> /
+
+   NEXTVAL
+----------
+	 2
+
+o12c:ORCL:ORCL:SYS
+SQL> SELECT scott.seq1.currval FROM dual;
+
+   CURRVAL
+----------
+	 2
+
+
+-- on target server (o12c2)
+
+o12c2:ORCL:ORCL:SYS
+SQL> SELECT count(*) FROM scott.myobjects;
+
+  COUNT(*)
+----------
+     71745
+
+o12c2:ORCL:ORCL:SYS
+SQL> SELECT count(*) FROM scott.myobjects2;
+
+  COUNT(*)
+----------
+     20711
+
+o12c2:ORCL:ORCL:SYS
+SQL> @seq
+Owner?(%)      : SCOTT
+
+dba_sequences
+Sequence							       Last Number	       Min Value  IncrBy      Cache Cycle Order Scale Extend Sess  Keep
+------------------------------------------------------------ --------------------- --------------------- ------- ---------- ----- ----- ----- ------ ----- -----
+SCOTT.SEQ1									 2		       1       1	  0 N	  N	N     N      N	   N
+
+1 row SELECTed.
+
+o12c2:ORCL:ORCL:SYS
+SQL> SELECT server_id,TOTAL_MESSAGES_APPLIED FROM V$GG_APPLY_SERVER WHERE apply_name= 'OGG$REP1';
+
+ SERVER_ID TOTAL_MESSAGES_APPLIED
+---------- ----------------------
+	 1			9
+	 3		   18
+	 5			0
+	 0			0
+	 4			0
+	 2		71796
+	 7			0
+	 6			0
+
+8 rows SELECTed.
+
+
+-- stopping and deleting
+
+-- on source server (o12c)
+
+dblogin useridalias ggs_owner_alias
+stop extract intext
+delete exttrail lt
+unregister EXTRACT intext DATABASE
+delete extract intext
+
+stop distpath ltrt
+delete distpath ltrt
+
+-- on target server (o12c2)
+dblogin useridalias ggs_owner_alias
+stop replicat rep1
+unregister replicat rep1 database
+delete replicat rep1

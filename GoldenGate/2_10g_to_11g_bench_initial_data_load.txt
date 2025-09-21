@@ -1,0 +1,449 @@
+https://gavinsoorma.com.au/knowledge-base/oracle-goldengate-tutorial-4-performing-initial-data-load/
+
+-- on GoldenGate 11g
+
+-- on source server (o10g) and on target server (o11g)
+
+sqlplus / as sysdba << END
+drop user scott cascade;
+create or replace directory data_pump_dir as '/home/oracle/temp';
+END
+
+
+-- on source server (o10g)
+-- import bench users on Oracle 10g database
+
+-- on mylaptop: 
+marius@mylaptop:~/oracle_exports/10g $ cat /etc/exports
+--------------------------------------------------------------------------------
+/home/marius  192.168.1.0/24(rw,sync,no_subtree_check,no_root_squash)
+--------------------------------------------------------------------------------
+chmod -R g+rw,o+rw /home/marius/oracle_exports
+
+sudo mount -t nfs mylaptop:/home/marius/oracle_exports/10g /home/oracle/temp
+
+[oracle@o10g (TSH1) temp]$ ls -lrt /home/oracle/temp
+total 4715680
+-rw-rw-rw- 1 1000 1000 1013227520 Jan 15 09:26 users_bench02.dmp
+-rw-rw-rw- 1 1000 1000 2147483648 Jan 15 09:27 users_bench01.dmp
+-rw-rw-rw- 1 1000 1000       7408 Jan 15 09:27 users_bench_EXP.log
+-rw-rw-rw- 1 1000 1000        349 Jan 15 09:27 users_bench_EXP.par
+-rw-rw-rw- 1 1000 1000     987136 Jan 15 09:27 users_bench_meta.dmp
+-rw-rw-rw- 1 1000 1000     145289 Jan 15 09:27 users_bench_meta.sql
+-rw-rw-rw- 1 1000 1000       1742 Jan 15 09:27 users_bench_meta_EXP.log
+-rw-rw-rw- 1 1000 1000        233 Jan 15 09:27 users_bench_meta_EXP.par
+-rw-rw-rw- 1 1000 1000       1508 Jan 15 09:27 users_bench_meta_IMP.log
+-rw-rw-rw- 1 1000 1000        216 Jan 15 09:27 users_bench_meta_IMP.par
+-rw-rw-rw- 1 1000 1000 1666969600 Jan 15 09:28 users_bench03.dmp
+
+
+-- get the path of DIRECTORY data_pump_dir
+cat <<END > /tmp/get_data_pump_dir.sql
+connect / as sysdba
+set lines 200 pages 0 echo off head off trim off trims off feed off
+rem alter session set container=pdb1;
+SELECT trim(directory_path) FROM dba_directories WHERE directory_name='DATA_PUMP_DIR';
+exit
+END
+vdir_path=$(${ORACLE_HOME}/bin/sqlplus -L -S /nolog @/tmp/get_data_pump_dir.sql | tr -d '\r' | tr -d ' ' | tr -d '\n')
+rm -f /tmp/get_data_pump_dir.sql
+echo $vdir_path
+
+-- creating tablespaces
+sqlplus / as sysdba << END
+create tablespace MOVIE_DATA    datafile '/u02/oradata/TSH1/movie_data01.dbf'   size 1m autoextend on next 1m;
+create tablespace MOVIE_INDX    datafile '/u02/oradata/TSH1/movie_indx01.dbf'   size 1m autoextend on next 1m;
+create tablespace SH_DATA       datafile '/u02/oradata/TSH1/sh_data01.dbf'      size 1m autoextend on next 1m;
+create tablespace SH_INDX       datafile '/u02/oradata/TSH1/sh_indx01.dbf'      size 1m autoextend on next 1m;
+create tablespace SOE_DATA      datafile '/u02/oradata/TSH1/soe_data01.dbf'     size 1m autoextend on next 1m;
+create tablespace SOE_INDX      datafile '/u02/oradata/TSH1/soe_indx01.dbf'     size 1m autoextend on next 1m;
+create tablespace TPCDS_DATA    datafile '/u02/oradata/TSH1/tpcds_data01.dbf'   size 1m autoextend on next 1m;
+create tablespace TPCDS_INDX    datafile '/u02/oradata/TSH1/tpcds_indx01.dbf'   size 1m autoextend on next 1m;
+create tablespace TPCH_DATA     datafile '/u02/oradata/TSH1/tpch_data01.dbf'    size 1m autoextend on next 1m;
+create tablespace TPCH_INDX     datafile '/u02/oradata/TSH1/tpch_indx01.dbf'    size 1m autoextend on next 1m;
+END
+
+
+-- import the users
+cat <<END > $vdir_path/users_bench2_IMP.par
+directory       = data_pump_dir
+dumpfile        = users_bench%U.dmp
+logfile         = users_bench2_IMP.log
+#transform       = storage:n
+#transform       = segment_attributes:n
+parallel		= 2
+schemas			= MOVIE,SH,SOE,TPCDSLIKE,TPCH
+END
+impdp system/manager parfile=$vdir_path/users_bench2_IMP.par
+
+sqlplus / as sysdba << END
+grant execute on dbms_lock to SOE,TPCDSLIKE;
+@?/rdbms/admin/utlrp
+END
+
+-- the users are:
+MOVIE,SH,SOE,TPCDSLIKE,TPCH
+
+
+-- on target server (o11g)
+
+-- creating tablespaces
+sqlplus / as sysdba << END
+create tablespace MOVIE_DATA    datafile '/u02/oradata/DB11G/movie_data01.dbf'   size 1m autoextend on next 1m;
+create tablespace MOVIE_INDX    datafile '/u02/oradata/DB11G/movie_indx01.dbf'   size 1m autoextend on next 1m;
+create tablespace SH_DATA       datafile '/u02/oradata/DB11G/sh_data01.dbf'      size 1m autoextend on next 1m;
+create tablespace SH_INDX       datafile '/u02/oradata/DB11G/sh_indx01.dbf'      size 1m autoextend on next 1m;
+create tablespace SOE_DATA      datafile '/u02/oradata/DB11G/soe_data01.dbf'     size 1m autoextend on next 1m;
+create tablespace SOE_INDX      datafile '/u02/oradata/DB11G/soe_indx01.dbf'     size 1m autoextend on next 1m;
+create tablespace TPCDS_DATA    datafile '/u02/oradata/DB11G/tpcds_data01.dbf'   size 1m autoextend on next 1m;
+create tablespace TPCDS_INDX    datafile '/u02/oradata/DB11G/tpcds_indx01.dbf'   size 1m autoextend on next 1m;
+create tablespace TPCH_DATA     datafile '/u02/oradata/DB11G/tpch_data01.dbf'    size 1m autoextend on next 1m;
+create tablespace TPCH_INDX     datafile '/u02/oradata/DB11G/tpch_indx01.dbf'    size 1m autoextend on next 1m;
+END
+
+-- creating users and grants
+sqlplus / as sysdba << END
+CREATE USER "SH" IDENTIFIED BY VALUES '54B253CBBAAA8C48' DEFAULT TABLESPACE "SH_DATA" TEMPORARY TABLESPACE "TEMP";
+CREATE USER "SOE" IDENTIFIED BY VALUES '552DCAEDD0062495' DEFAULT TABLESPACE "SOE_DATA" TEMPORARY TABLESPACE "TEMP";
+CREATE USER "MOVIE" IDENTIFIED BY VALUES '46776771543A393A' DEFAULT TABLESPACE "MOVIE_DATA" TEMPORARY TABLESPACE "TEMP";
+CREATE USER "TPCH" IDENTIFIED BY VALUES 'BD85AD96A050855C' DEFAULT TABLESPACE "TPCH_DATA" TEMPORARY TABLESPACE "TEMP";
+CREATE USER "TPCDSLIKE" IDENTIFIED BY VALUES '40133224B6812FE8' DEFAULT TABLESPACE "TPCDS_DATA" TEMPORARY TABLESPACE "TEMP";
+GRANT ANALYZE ANY DICTIONARY TO "TPCH";
+GRANT ANALYZE ANY TO "TPCH";
+GRANT CREATE PROCEDURE TO "TPCH";
+GRANT CREATE SEQUENCE TO "TPCH";
+GRANT CREATE VIEW TO "TPCH";
+GRANT CREATE TABLE TO "TPCH";
+GRANT UNLIMITED TABLESPACE TO "TPCH";
+GRANT ALTER SESSION TO "TPCH";
+GRANT CREATE SESSION TO "TPCH";
+GRANT ALTER SYSTEM TO "TPCH";
+GRANT MANAGE SCHEDULER TO "TPCDSLIKE";
+GRANT CREATE JOB TO "TPCDSLIKE";
+GRANT ANALYZE ANY DICTIONARY TO "TPCDSLIKE";
+GRANT ANALYZE ANY TO "TPCDSLIKE";
+GRANT CREATE PROCEDURE TO "TPCDSLIKE";
+GRANT CREATE SEQUENCE TO "TPCDSLIKE";
+GRANT CREATE VIEW TO "TPCDSLIKE";
+GRANT CREATE TABLE TO "TPCDSLIKE";
+GRANT UNLIMITED TABLESPACE TO "TPCDSLIKE";
+GRANT ALTER SESSION TO "TPCDSLIKE";
+GRANT CREATE SESSION TO "TPCDSLIKE";
+GRANT MANAGE SCHEDULER TO "SOE";
+GRANT CREATE JOB TO "SOE";
+GRANT ANALYZE ANY DICTIONARY TO "SOE";
+GRANT ANALYZE ANY TO "SOE";
+GRANT CREATE PROCEDURE TO "SOE";
+GRANT CREATE SEQUENCE TO "SOE";
+GRANT CREATE VIEW TO "SOE";
+GRANT CREATE TABLE TO "SOE";
+GRANT UNLIMITED TABLESPACE TO "SOE";
+GRANT ALTER SESSION TO "SOE";
+GRANT CREATE SESSION TO "SOE";
+GRANT MANAGE SCHEDULER TO "SH";
+GRANT CREATE JOB TO "SH";
+GRANT ANALYZE ANY DICTIONARY TO "SH";
+GRANT CREATE MATERIALIZED VIEW TO "SH";
+GRANT ANALYZE ANY TO "SH";
+GRANT CREATE PROCEDURE TO "SH";
+GRANT CREATE SEQUENCE TO "SH";
+GRANT CREATE VIEW TO "SH";
+GRANT CREATE TABLE TO "SH";
+GRANT UNLIMITED TABLESPACE TO "SH";
+GRANT ALTER SESSION TO "SH";
+GRANT CREATE SESSION TO "SH";
+GRANT MANAGE SCHEDULER TO "MOVIE";
+GRANT CREATE JOB TO "MOVIE";
+GRANT ANALYZE ANY DICTIONARY TO "MOVIE";
+GRANT ANALYZE ANY TO "MOVIE";
+GRANT CREATE PROCEDURE TO "MOVIE";
+GRANT CREATE SEQUENCE TO "MOVIE";
+GRANT CREATE VIEW TO "MOVIE";
+GRANT CREATE TABLE TO "MOVIE";
+GRANT UNLIMITED TABLESPACE TO "MOVIE";
+GRANT ALTER SESSION TO "MOVIE";
+GRANT CREATE SESSION TO "MOVIE";
+grant execute on dbms_lock to SOE,TPCDSLIKE;
+GRANT "RESOURCE" TO "TPCH";
+GRANT "RESOURCE" TO "TPCDSLIKE";
+GRANT "RESOURCE" TO "SOE";
+GRANT "RESOURCE" TO "SH";
+GRANT "RESOURCE" TO "MOVIE";
+ALTER USER "TPCH" DEFAULT ROLE ALL;
+ALTER USER "TPCDSLIKE" DEFAULT ROLE ALL;
+ALTER USER "SOE" DEFAULT ROLE ALL;
+ALTER USER "SH" DEFAULT ROLE ALL;
+ALTER USER "MOVIE" DEFAULT ROLE ALL;
+END
+
+-- creating sequences
+sqlplus / as sysdba << END
+CREATE SEQUENCE  "TPCH"."CUSTOMER_SEQ"  MINVALUE 1 MAXVALUE 999999999999999999999999999 INCREMENT BY 1 START WITH 150001 CACHE 100000 NOORDER  NOCYCLE ;
+CREATE SEQUENCE  "TPCH"."ORDERS_SEQ"  MINVALUE 1 MAXVALUE 999999999999999999999999999 INCREMENT BY 1 START WITH 1500001 CACHE 100000 NOORDER  NOCYCLE ;
+CREATE SEQUENCE  "SOE"."ADDRESS_SEQ"  MINVALUE 1 MAXVALUE 999999999999999999999999999 INCREMENT BY 1 START WITH 1500001 CACHE 100000 NOORDER  NOCYCLE ;
+CREATE SEQUENCE  "SOE"."CARD_DETAILS_SEQ"  MINVALUE 1 MAXVALUE 999999999999999999999999999 INCREMENT BY 1 START WITH 1500001 CACHE 100000 NOORDER  NOCYCLE ;
+CREATE SEQUENCE  "SOE"."CUSTOMER_SEQ"  MINVALUE 1 MAXVALUE 999999999999999999999999999 INCREMENT BY 1 START WITH 1000001 CACHE 100000 NOORDER  NOCYCLE ;
+CREATE SEQUENCE  "SOE"."LOGON_SEQ"  MINVALUE 1 MAXVALUE 999999999999999999999999999 INCREMENT BY 1 START WITH 2382985 CACHE 100000 NOORDER  NOCYCLE ;
+CREATE SEQUENCE  "SOE"."ORDERS_SEQ"  MINVALUE 1 MAXVALUE 999999999999999999999999999 INCREMENT BY 1 START WITH 1429791 CACHE 100000 NOORDER  NOCYCLE ;
+END
+
+DROP SEQUENCE  "TPCH"."CUSTOMER_SEQ";
+DROP SEQUENCE  "TPCH"."ORDERS_SEQ";
+
+DROP SEQUENCE  "SOE"."ADDRESS_SEQ";
+DROP SEQUENCE  "SOE"."CARD_DETAILS_SEQ";
+DROP SEQUENCE  "SOE"."CUSTOMER_SEQ";
+DROP SEQUENCE  "SOE"."LOGON_SEQ";
+DROP SEQUENCE  "SOE"."ORDERS_SEQ";
+
+
+-- creating tables
+@2_10g_11g_bench_initial_data_load_cr_tables.sql
+
+
+
+Oracle GoldenGate initial load methods that contain the SOURCEISTABLE
+parameter, either as an Extract parameter or within ADD EXTRACT, do not support the replication of sequence values.
+
+
+-- on source server (o10g)
+
+-- Create the Initial data extract process per user ext1-ext5
+
+cd $OGG_HOME
+ggsci
+
+-- extract ext1 load data FROM file to replicat
+ADD EXTRACT ext1, SOURCEISTABLE
+-- Create the parameter file for the extract group ext1
+EDIT PARAMS ext1
+
+EXTRACT ext1
+setenv (NLS_LANG="AMERICAN_AMERICA.WE8ISO8859P15")
+USERID ggs_owner, PASSWORD ggs_owner
+GETAPPLOPS
+RMTHOST o11g, MGRPORT 7809
+RMTFILE /u01/app/oracle/product/gg/dirdat/rt, MEGABYTES 500 purge
+TABLE MOVIE.*;
+
+
+-- extract ext1 load data with Oracle GoldenGate direct load
+ADD EXTRACT ext2, SOURCEISTABLE
+-- Create the parameter file for the extract group ext2
+EDIT PARAMS ext2
+
+EXTRACT ext2
+setenv (NLS_LANG="AMERICAN_AMERICA.WE8ISO8859P15")
+USERID ggs_owner, PASSWORD ggs_owner
+GETAPPLOPS
+RMTHOST o11g, MGRPORT 7809
+RMTTASK replicat, GROUP rep2
+TABLE SH.*;
+
+
+ADD EXTRACT ext3, SOURCEISTABLE
+-- Create the parameter file for the extract group ext3
+EDIT PARAMS ext3
+
+EXTRACT ext3
+setenv (NLS_LANG="AMERICAN_AMERICA.WE8ISO8859P15")
+USERID ggs_owner, PASSWORD ggs_owner
+GETAPPLOPS
+RMTHOST o11g, MGRPORT 7809
+RMTTASK replicat, GROUP rep3
+TABLE SOE.*;
+
+
+ADD EXTRACT ext4, SOURCEISTABLE
+-- Create the parameter file for the extract group ext4
+EDIT PARAMS ext4
+
+EXTRACT ext4
+setenv (NLS_LANG="AMERICAN_AMERICA.WE8ISO8859P15")
+USERID ggs_owner, PASSWORD ggs_owner
+GETAPPLOPS
+RMTHOST o11g, MGRPORT 7809
+RMTTASK replicat, GROUP rep4
+TABLE TPCDSLIKE.*;
+
+ADD EXTRACT ext5, SOURCEISTABLE
+-- Create the parameter file for the extract group ext5
+EDIT PARAMS ext5
+
+EXTRACT ext5
+setenv (NLS_LANG="AMERICAN_AMERICA.WE8ISO8859P15")
+USERID ggs_owner, PASSWORD ggs_owner
+GETAPPLOPS
+RMTHOST o11g, MGRPORT 7809
+RMTTASK replicat, GROUP rep5
+TABLE TPCH.*;
+
+
+-- on target server (o11g)
+
+-- Create the initial data load task rep1-rep5
+
+cd $OGG_HOME
+ggsci
+
+ADD REPLICAT rep1, SPECIALRUN
+
+-- Create the parameter file for the Replicat group, rep1
+EDIT PARAMS rep1
+
+REPLICAT rep1
+SPECIALRUN
+end runtime
+setenv (NLS_LANG="AMERICAN_AMERICA.AL32UTF8")
+USERID ggs_owner, PASSWORD ggs_owner
+extfile /u01/app/oracle/product/gg/dirdat/rt
+ASSUMETARGETDEFS
+MAP MOVIE.*, TARGET MOVIE.*;
+
+ADD REPLICAT rep2, SPECIALRUN
+
+-- Create the parameter file for the Replicat group, rep2
+EDIT PARAMS rep2
+
+REPLICAT rep2
+setenv (NLS_LANG="AMERICAN_AMERICA.AL32UTF8")
+USERID ggs_owner, PASSWORD ggs_owner
+ASSUMETARGETDEFS
+MAP SH.*, TARGET SH.*;
+
+
+ADD REPLICAT rep3, SPECIALRUN
+
+-- Create the parameter file for the Replicat group, rep3
+EDIT PARAMS rep3
+
+REPLICAT rep3
+setenv (NLS_LANG="AMERICAN_AMERICA.AL32UTF8")
+USERID ggs_owner, PASSWORD ggs_owner
+ASSUMETARGETDEFS
+MAP SOE.*, TARGET SOE.*;
+
+
+ADD REPLICAT rep4, SPECIALRUN
+
+-- Create the parameter file for the Replicat group, rep4
+EDIT PARAMS rep4
+
+REPLICAT rep4
+setenv (NLS_LANG="AMERICAN_AMERICA.AL32UTF8")
+USERID ggs_owner, PASSWORD ggs_owner
+ASSUMETARGETDEFS
+MAP TPCDSLIKE.*, TARGET TPCDSLIKE.*;
+
+
+ADD REPLICAT rep5, SPECIALRUN
+
+-- Create the parameter file for the Replicat group, rep5
+EDIT PARAMS rep5
+
+REPLICAT rep5
+setenv (NLS_LANG="AMERICAN_AMERICA.AL32UTF8")
+USERID ggs_owner, PASSWORD ggs_owner
+ASSUMETARGETDEFS
+MAP TPCH.*, TARGET TPCH.*;
+
+-- TODO: Sync the Sequences
+
+
+-- on source server (o10g)
+Tablespace			   Size(MB)	Used(MB)     Free(MB)	%Full	 FRGT
+------------------------------ ------------ ------------ ------------ ------- -------
+GGS_DATA				 10	       9	    1	88.13	    2
+MOVIE_DATA			      1,055	   1,054	    1	99.90	    2
+MOVIE_INDX				  1	       0	    1	 6.25	    1
+SH_DATA 			      1,352	   1,351	    1	99.90	    2
+SH_INDX 				  1	       0	    1	 6.25	    1
+SOE_DATA			      1,987	   1,985	    2	99.91	    2
+SOE_INDX				  1	       0	    1	 6.25	    1
+SYSAUX					280	     276	    4	98.57	    2
+SYSTEM					450	     440	   10	97.74	    4
+TPCDS_DATA			      1,650	   1,649	    1	99.94	    1
+TPCDS_INDX				  1	       0	    1	 6.25	    1
+TPCH_DATA			      1,108	   1,106	    2	99.84	    2
+TPCH_INDX				  1	       0	    1	 6.25	    1
+UNDOTBS1				 60	      36	   24	60.31	   49
+USERS					 14	       0	   14	  .45	    1
+			       ------------ ------------ ------------
+sum				      7,971	   7,906	   64
+o10g:TSH1:TSH1:SYS
+
+
+-- on target server (o11g)
+o11g:DB11G:DB11G:SYS
+SQL> SELECT count(*) FROM scott.dummy;
+
+  COUNT(*)
+----------
+	 0
+
+-- on source server (o10g)
+
+-- Start the initial load data extract task on the source system
+cd $OGG_HOME
+ggsci
+
+start extract ext1
+start extract ext2
+start extract ext3
+start extract ext4
+start extract ext5
+
+info extract ext1
+view report ext1
+
+
+
+-- on target server (o11g)
+
+Tablespace			   Size(MB)	Used(MB)     Free(MB)	%Full	 FRGT
+------------------------------ ------------ ------------ ------------ ------- -------
+GGS_DATA				  7	       6	    1	84.82	    2
+MOVIE_DATA				707	     166	  541	23.42	    2
+MOVIE_INDX				  1	       0	    1	 6.25	    1
+SH_DATA 				337	     337	    1	99.85	    1
+SH_INDX 				  1	       0	    1	 6.25	    1
+SOE_DATA				200	     191	    9	95.31	    2
+SOE_INDX				  1	       0	    1	 6.25	    1
+SYSAUX					600	     259	  342	43.08	    2
+SYSTEM					700	     547	  153	78.14	    1
+TPCDS_DATA				235	     223	   12	95.05	    2
+TPCDS_INDX				  1	       0	    1	 6.25	    1
+TPCH_DATA				253	     248	    5	98.20	    2
+TPCH_INDX				  1	       0	    1	 6.25	    1
+UNDOTBS1			      1,075	   1,072	    3	99.72	    3
+USERS					  5	       1	    4	20.00	    1
+			       ------------ ------------ ------------
+sum				      4,124	   3,049	1,075
+
+-- stopping and deleting
+
+-- on source server (o10g)
+DBLOGIN USERID ggs_owner, PASSWORD ggs_owner
+stop extract ext1
+stop extract ext2
+stop extract ext3
+stop extract ext4
+stop extract ext5
+delete extract ext1
+delete extract ext2
+delete extract ext3
+delete extract ext4
+delete extract ext5
+
+-- on target server (o11g)
+DBLOGIN USERID ggs_owner, PASSWORD ggs_owner
+stop replicat rep1
+stop replicat rep2
+stop replicat rep3
+stop replicat rep4
+stop replicat rep5
+delete replicat rep1
+delete replicat rep2
+delete replicat rep3
+delete replicat rep4
+delete replicat rep5

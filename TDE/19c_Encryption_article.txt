@@ -1,0 +1,462 @@
+19c Encryption
+This post list few admin tasks related to TDE on 19c. 
+There's an earlier post with regard to 12c encryption. 
+The database version used for this post is 19.4 non-CDB single instance (Oracle restart configuration).
+
+    Setup Wallet Location
+    Setup Keystore
+    Move Master Key
+    Change FROM Auto Login to Local Auto Login
+    Backup Keystore
+    Creating a Master Key for Later Use
+    Activating Earlier Created Master Key
+    Rekeying Master key
+    Exporting and Importing Keys
+    Merging Keystores
+    Change Keystore Password
+    Encrypted Tablespace Creation
+    Data Pump Export and Import with Encryption
+    RMAN Backup with Encryption
+    Delete Keystore and Issues
+
+Setup Wallet Location
+As for 18c the use of ENCRYPTION_WALLET_LOCATION to specify the wallet location is depreciated. 
+Following FROM DB reference guide "The SQLNET.ENCRYPTION_WALLET_LOCATION parameter is deprecated in Oracle Database 18c". 
+Advanced Security guide also states the same "In the sqlnet.ora file, you must set the ENCRYPTION_WALLET_LOCATION parameter 
+to specify the keystore location. However, be aware that ENCRYPTION_WALLET_LOCATION is deprecated, starting with Oracle Database release 19c 
+in favour of using the WALLET_ROOT and TDE_CONFIGURATION initialization parameters.
+The recommended way is to use the wallet_root DB parameter along with TDE_CONFIGURATION parameter as stated on security guide 
+"use the WALLET_ROOT and TDE_CONFIGURATION initialization parameters to configure the keystore location in an ASM system. 
+The TDE_CONFIGURATION parameter must be set with the attribute KEYSTORE_CONFIGURATION=FILE in order for the WALLET_ROOT parameter to work. 
+Note that starting with Oracle Database release 19c, the ENCRYPTION_WALLET_LOCATION, set in the sqlnet.ora file, is deprecated 
+in favor of WALLET_ROOT and TDE_CONFIGURATION".
+As the first step create a directory to store the file based key store and set the location on the wallet_root parameter.
+mkdir -p $ORACLE_BASE/wallet
+Security documentation states the WALLET_ROOT value can include references to environment variables. The following example uses the value 
+of the ORACLE_BASE environment variable to set the root of the wallet directory hierarchy: WALLET_ROOT=$ORACLE_BASE/admin/orcl/wallet".
+In environment that uses CRS (RAC or OHAS) the environment variable must be set using setenv (Refer 733567.1). 
+If not setting the wallet_root with an environment variable fail as below.
+SQL> alter system set wallet_root='$ORACLE_BASE/wallet' SCOPE=SPFILE;
+
+System altered.
+
+srvctl stop database -db masterdb
+srvctl start database -db masterdb
+PRCR-1079 : Failed to start resource ora.masterdb.db
+CRS-5017: The resource action "ora.masterdb.db start" encountered the following error:
+ORA-01078: failure in processing system parameters
+. For details refer to "(:CLSN00107:)" in "/opt/app/oracle/diag/crs/rhel71/crs/trace/ohasd_oraagent_oracle.trc".
+
+CRS-2674: Start of 'ora.masterdb.db' on 'rhel71' failed
+
+2019-08-07 08:22:38.393 :    GPNP:3535951616: clsgpnpkwf_initwfloc: [at clsgpnpkwf.c:438] Result: (7) CLSGPNP_IO. (:GPNP01004:)Fatal: 
+Cannot open neither PEER nor PRDR GPnP wallet. No more wallets to verify GPnP configuration (profile). 
+Check GPnP configuration: wallet(s) either missing or do not have access privileges. statres: -5, 
+Wallet home : /opt/app/oracle/product/19.x.0/grid/gpnp/rhel71/wallets/.
+
+1. To prevent this issue FROM happening use one of the following. Either set the wallet_root without environment variable on the path.
+alter system set wallet_root='/opt/app/oracle/wallet' scope=spfile;
+Alternately set the environment variable using setenv option for the database.
+srvctl setenv database -db masterdb -env "ORACLE_BASE=/opt/app/oracle"
+
+srvctl getenv database -db masterdb
+masterdb:
+ORACLE_BASE=/opt/app/oracle
+Then set the wallet root with environment variable in the path
+SQL> alter system set wallet_root='$ORACLE_BASE/wallet' SCOPE=SPFILE;
+Setting the tde_configuration require wallet_root to be already set. Without it the tde_configuration setting will fail.
+SQL> alter system set tde_configuration="KEYSTORE_CONFIGURATION=FILE"  SCOPE=SPFILE;
+alter system set tde_configuration="KEYSTORE_CONFIGURATION=FILE"  SCOPE=SPFILE
+*
+ERROR at line 1:
+ORA-32017: failure in updating SPFILE
+ORA-46693: The WALLET_ROOT location is missing or invalid.
+Therefore, after the wallet_root is set, restart the database.
+srvctl stop database -db masterdb
+srvctl start database -db masterdb
+2. Set the tde_configuration parameter. Following sets it for a file based wallet keystore.
+SQL> alter system set tde_configuration="KEYSTORE_CONFIGURATION=FILE"  SCOPE=BOTH;
+
+Setup Keystore
+Once key store is created. It cannot be deleted. Test throughly before creating on production environemnts.
+1. Login as key management user if one is created. If not it is possible to use SYSKM.
+sqlplus / as syskm
+2. Create the key store by specifying a password for the keystore.
+ADMINISTER KEY MANAGEMENT CREATE KEYSTORE IDENTIFIED BY tde_key#$03;
+At the end of this command inside the wallet_root location a new folder called "tde" would be created.
+cd /opt/app/oracle/wallet/
+$ ls
+tde
+Inside the "tde" folder will be the wallet (keystore) file.
+cd tde/
+$ ls
+ewallet.p12
+3. Open the key store by specifying the password.
+SQL> ADMINISTER KEY MANAGEMENT SET KEYSTORE OPEN IDENTIFIED BY  tde_key#$03;
+4. Set the master key
+SQL> ADMINISTER KEY MANAGEMENT SET KEY USING TAG 'master key' IDENTIFIED BY tde_key#$03 WITH BACKUP USING 'masterbackup';
+This will create the backup file inside tde directory.
+$ls
+ewallet.p12 ewallet_2019080809241127_masterbackup.p12
+5. Create autologin for the key store.
+SQL> ADMINISTER KEY MANAGEMENT CREATE AUTO_LOGIN KEYSTORE FROM KEYSTORE IDENTIFIED BY tde_key#$03;
+Querying the wallet at this stage it will be shown as password based.
+SQL> SELECT WRL_TYPE,STATUS,WALLET_TYPE,WALLET_ORDER,FULLY_BACKED_UP,CON_ID,WRL_PARAMETER FROM v$ENCRYPTION_WALLET;
+
+WRL_TYPE             STATUS                         WALLET_TYPE          WALLET_OR FULLY_BAC     CON_ID WRL_PARAMETER
+-------------------- ------------------------------ -------------------- --------- --------- ---------- ------------------------------
+FILE                 OPEN                           PASSWORD             SINGLE    NO                 0 /opt/app/oracle/wallet/tde/
+
+But after the database is restarted the wallet type will change to auto login..
+SQL> SELECT WRL_TYPE,STATUS,WALLET_TYPE,WALLET_ORDER,FULLY_BACKED_UP,CON_ID,WRL_PARAMETER FROM v$ENCRYPTION_WALLET;
+
+WRL_TYPE             STATUS                         WALLET_TYPE          WALLET_OR FULLY_BAC     CON_ID WRL_PARAMETER
+-------------------- ------------------------------ -------------------- --------- --------- ---------- ------------------------------
+FILE                 OPEN                           AUTOLOGIN            SINGLE    NO                 0 /opt/app/oracle/wallet/tde/
+
+As this is non-CDB the keystore mode none is shown.
+SQL> SELECT CON_ID, KEYSTORE_MODE FROM V$ENCRYPTION_WALLET;
+
+    CON_ID KEYSTORE
+---------- --------
+         0 NON
+Move Master Key
+Moving of the master key is required if the keystore is to be deleted. Normally the active master key is moved out to a keystore in a different location. Below example shows moving a particular master key. 1. Find the key id of the master key to be moved. In this case key_id "ASxb82RXzk+5v+YrGLS1IYEAAAAAAAAAAAAAAAAAAAAAAAAAAAAA" is SELECTed
+KEY_ID                                                       CREATION_TIME                       ACTIVATION_TIME                                                             TAG
+------------------------------------------------------------ ----------------------------------- --------------------------------------------------------------------------- --------------------
+AW/NN5gqQk//vwjnb0ibS9oAAAAAAAAAAAAAAAAAAAAAAAAAAAAA         08-AUG-19 02.47.09.861855 PM +00:00 08-AUG-19 02.47.09.861858 PM +00:00                                         new key
+ASxb82RXzk+5v+YrGLS1IYEAAAAAAAAAAAAAAAAAAAAAAAAAAAAA         08-AUG-19 02.46.00.225121 PM +00:00 08-AUG-19 02.46.00.225124 PM +00:00                                         new key
+AVxZXAgmCk/7v8O2MCHgs3cAAAAAAAAAAAAAAAAAAAAAAAAAAAAA         08-AUG-19 01.20.07.457233 PM +00:00 08-AUG-19 01.20.07.457236 PM +00:00                                         new key
+AXHy2i81kk8kvxb1e21UGHwAAAAAAAAAAAAAAAAAAAAAAAAAAAAA         08-AUG-19 01.19.10.390982 PM +00:00 08-AUG-19 01.19.10.390986 PM +00:00
+AUBz/7910k8mvzRinUjJI8sAAAAAAAAAAAAAAAAAAAAAAAAAAAAA         08-AUG-19 01.07.36.332802 PM +00:00 08-AUG-19 01.09.44.050057 PM +00:00                                         later key activates
+AWkmwKVV4E+iv0T2YGfadKIAAAAAAAAAAAAAAAAAAAAAAAAAAAAA         08-AUG-19 12.49.34.267593 PM +00:00 08-AUG-19 12.49.34.267595 PM +00:00                                         master key
+AQcbZpO6rk8xv6WYU5t7BjYAAAAAAAAAAAAAAAAAAAAAAAAAAAAA         08-AUG-19 12.49.03.922879 PM +00:00 08-AUG-19 12.49.03.922885 PM +00:00                                         master key
+
+7 rows SELECTed.
+
+2. Move the master key associated with the key id.
+SQL> ADMINISTER KEY MANAGEMENT MOVE KEYS
+TO NEW KEYSTORE '/home/oracle'
+IDENTIFIED BY test
+FROM force KEYSTORE
+IDENTIFIED BY tde_key#$03
+WITH IDENTIFIER IN 'ASxb82RXzk+5v+YrGLS1IYEAAAAAAAAAAAAAAAAAAAAAAAAAAAAA' with backup;
+3. Querying the V$ENCRYPTION_KEYS view shows one row less. The moved key id would be missing.
+KEY_ID                                                       CREATION_TIME                       ACTIVATION_TIME                                                             TAG
+------------------------------------------------------------ ----------------------------------- --------------------------------------------------------------------------- --------------------
+AW/NN5gqQk//vwjnb0ibS9oAAAAAAAAAAAAAAAAAAAAAAAAAAAAA         08-AUG-19 02.47.09.861855 PM +00:00 08-AUG-19 02.47.09.861858 PM +00:00                                         new key
+AVxZXAgmCk/7v8O2MCHgs3cAAAAAAAAAAAAAAAAAAAAAAAAAAAAA         08-AUG-19 01.20.07.457233 PM +00:00 08-AUG-19 01.20.07.457236 PM +00:00                                         new key
+AXHy2i81kk8kvxb1e21UGHwAAAAAAAAAAAAAAAAAAAAAAAAAAAAA         08-AUG-19 01.19.10.390982 PM +00:00 08-AUG-19 01.19.10.390986 PM +00:00
+AUBz/7910k8mvzRinUjJI8sAAAAAAAAAAAAAAAAAAAAAAAAAAAAA         08-AUG-19 01.07.36.332802 PM +00:00 08-AUG-19 01.09.44.050057 PM +00:00                                         later key activates
+AWkmwKVV4E+iv0T2YGfadKIAAAAAAAAAAAAAAAAAAAAAAAAAAAAA         08-AUG-19 12.49.34.267593 PM +00:00 08-AUG-19 12.49.34.267595 PM +00:00                                         master key
+AQcbZpO6rk8xv6WYU5t7BjYAAAAAAAAAAAAAAAAAAAAAAAAAAAAA         08-AUG-19 12.49.03.922879 PM +00:00 08-AUG-19 12.49.03.922885 PM +00:00                                         master key
+
+6 rows SELECTed.
+
+
+Change FROM Auto Login to Local Auto Login
+Local auto login files gives an added layer of security than auto login keystores. Local auto login keystores could only be used in the machine they were created in. If the file was moved to a different machine it then it becomes unusable. Below steps shows how to move FROM an auto login to a local auto login keystore. It is also possible to create key store as local auto login FROM the beginning as in step 5 of setting up keystore.
+1. Close the key store
+ADMINISTER KEY MANAGEMENT SET KEYSTORE close;
+2. Backup the current auto login key store file.
+mv cwallet.sso cwallet.sso.bak
+3. Open the password key store
+ADMINISTER KEY MANAGEMENT SET KEYSTORE OPEN IDENTIFIED BY  tde_key#$03;
+4. Create the local auto login key store
+ADMINISTER KEY MANAGEMENT CREATE local AUTO_LOGIN KEYSTORE FROM KEYSTORE IDENTIFIED BY tde_key#$03;
+
+
+WRL_TYPE             STATUS                         WALLET_TYPE          WALLET_OR FULLY_BAC     CON_ID WRL_PARAMETER
+-------------------- ------------------------------ -------------------- --------- --------- ---------- ------------------------------
+FILE                 OPEN                           LOCAL_AUTOLOGIN      SINGLE    NO                 0 /opt/app/oracle/wallet/tde/
+
+Backup Keystore
+1. Backup the key store with the following command. Optionally a backup tag could be specified.
+ ADMINISTER KEY MANAGEMENT BACKUP KEYSTORE USING 'backup_tag' FORCE KEYSTORE IDENTIFIED BY tde_key#$03;
+2. The backup file will have the backup tag appended to the file name
+ ls -l
+-rw-------. 1 oracle asmadmin 11387 Sep 30 10:54 ewallet_2019093014540730_backup_tag.p12
+-rw-------. 1 oracle asmadmin 11387 Sep 30 10:54 ewallet.p12
+
+If backing up to a specific location then specify the backup location with "TO".
+ADMINISTER KEY MANAGEMENT BACKUP KEYSTORE USING 'backup_tag' FORCE KEYSTORE IDENTIFIED BY tde_key#$03 TO '/home/oracle'
+
+Creating a Master Key for Later Use
+It is possible to create master key beforehand for later use. Steps below shows creating a master key but not activating it.
+1. Current keys
+SQL> SELECT KEY_ID,creation_time,activation_time,tag FROM V$ENCRYPTION_KEYS;
+
+KEY_ID                                                  CREATION_TIME                       ACTIVATION_TIME                     TAG
+------------------------------------------------------- ----------------------------------- ----------------------------------- ----------------
+AWkmwKVV4E+iv0T2YGfadKIAAAAAAAAAAAAAAAAAAAAAAAAAAAAA    08-AUG-19 12.49.34.267593 PM +00:00 08-AUG-19 12.49.34.267595 PM +00:00 master key
+AQcbZpO6rk8xv6WYU5t7BjYAAAAAAAAAAAAAAAAAAAAAAAAAAAAA    08-AUG-19 12.49.03.922879 PM +00:00 08-AUG-19 12.49.03.922885 PM +00:00 master key
+
+2. Create the new key for later use.
+ADMINISTER KEY MANAGEMENT CREATE KEY USING TAG 'new key for later'  force keystore IDENTIFIED BY  tde_key#$03 WITH BACKUP USING 'later key';
+
+
+SQL>  SELECT KEY_ID,creation_time,activation_time,tag FROM V$ENCRYPTION_KEYS;
+
+KEY_ID                                                  CREATION_TIME                       ACTIVATION_TIME                     TAG
+------------------------------------------------------- ----------------------------------- ----------------------------------- ------------------
+AUBz/7910k8mvzRinUjJI8sAAAAAAAAAAAAAAAAAAAAAAAAAAAAA    08-AUG-19 01.07.36.332802 PM +00:00                                     new key for later
+AQcbZpO6rk8xv6WYU5t7BjYAAAAAAAAAAAAAAAAAAAAAAAAAAAAA    08-AUG-19 12.49.03.922879 PM +00:00 08-AUG-19 12.49.03.922885 PM +00:00 master key
+AWkmwKVV4E+iv0T2YGfadKIAAAAAAAAAAAAAAAAAAAAAAAAAAAAA    08-AUG-19 12.49.34.267593 PM +00:00 08-AUG-19 12.49.34.267595 PM +00:00 master key
+
+
+Activating Earlier Created Master Key
+In this steps the earlier created master key is activated.
+1. Identify the key_id of the master key that needs to be activated. The activation column would be null for never activated key. They key_id of the earlier created master key is "AUBz/7910k8mvzRinUjJI8sAAAAAAAAAAAAAAAAAAAAAAAAAAAAA".
+SQL>  SELECT KEY_ID,creation_time,activation_time,tag FROM V$ENCRYPTION_KEYS;
+
+KEY_ID                                                  CREATION_TIME                       ACTIVATION_TIME                     TAG
+------------------------------------------------------- ----------------------------------- ----------------------------------- ------------------
+AUBz/7910k8mvzRinUjJI8sAAAAAAAAAAAAAAAAAAAAAAAAAAAAA    08-AUG-19 01.07.36.332802 PM +00:00                                     new key for later
+
+2. Activate the key with the "USE KEY" command.
+SQL> ADMINISTER KEY MANAGEMENT USE KEY 'AUBz/7910k8mvzRinUjJI8sAAAAAAAAAAAAAAAAAAAAAAAAAAAAA' USING TAG 'later key activates'  force keystore IDENTIFIED BY tde_key#$03 WITH BACKUP using 'later key activates';
+
+3. Check the activation time is set of the key. The tag column will be updated with the new tag used during activation.
+SQL>  SELECT KEY_ID,creation_time,activation_time,tag FROM V$ENCRYPTION_KEYS;
+
+KEY_ID                                                  CREATION_TIME                       ACTIVATION_TIME                     TAG
+------------------------------------------------------- ----------------------------------- ----------------------------------- -----------------------
+AUBz/7910k8mvzRinUjJI8sAAAAAAAAAAAAAAAAAAAAAAAAAAAAA    08-AUG-19 01.07.36.332802 PM +00:00 08-AUG-19 01.09.44.050057 PM +00:00 later key activates
+AQcbZpO6rk8xv6WYU5t7BjYAAAAAAAAAAAAAAAAAAAAAAAAAAAAA    08-AUG-19 12.49.03.922879 PM +00:00 08-AUG-19 12.49.03.922885 PM +00:00 master key
+AWkmwKVV4E+iv0T2YGfadKIAAAAAAAAAAAAAAAAAAAAAAAAAAAAA    08-AUG-19 12.49.34.267593 PM +00:00 08-AUG-19 12.49.34.267595 PM +00:00 master key
+
+
+Rekeying Master key
+Rekeying master key may be needed as part of regulatory compliance or if it's suspected the master key is compromised. Rekeying creates a new master key and activates it. If the DB is part of a data guard configuration then rekeying will stop the redo apply until new key is available on the standby. Considering this and below points before rekeying.
+1. Before rekeying is attempted verify that tablespaces are not under going an online rekeying themselves. If the status is REKEYING instead of NORMAL then do not attempt rekeying master key until tablespace rekeying completes.
+SQL> SELECT TS#,ENCRYPTIONALG,STATUS FROM V$ENCRYPTED_TABLESPACES;
+
+       TS# ENCRYPT STATUS
+---------- ------- ----------
+         7 AES256  NORMAL
+        10 AES256  NORMAL
+2. Use "SET KEY" to rekey a new master key.
+SQL> ADMINISTER KEY MANAGEMENT SET KEY using tag 'new key' FORCE KEYSTORE IDENTIFIED BY tde_key#$03 WITH BACKUP USING 'new key backup';
+
+3. Verify the new key is added.
+SQL>  SELECT KEY_ID,creation_time,activation_time,tag FROM V$ENCRYPTION_KEYS;
+
+KEY_ID                                                  CREATION_TIME                       ACTIVATION_TIME                     TAG
+------------------------------------------------------- ----------------------------------- ----------------------------------- ------------------------------
+AVxZXAgmCk/7v8O2MCHgs3cAAAAAAAAAAAAAAAAAAAAAAAAAAAAA    08-AUG-19 01.20.07.457233 PM +00:00 08-AUG-19 01.20.07.457236 PM +00:00 new key
+AUBz/7910k8mvzRinUjJI8sAAAAAAAAAAAAAAAAAAAAAAAAAAAAA    08-AUG-19 01.07.36.332802 PM +00:00 08-AUG-19 01.09.44.050057 PM +00:00 later key activates
+AQcbZpO6rk8xv6WYU5t7BjYAAAAAAAAAAAAAAAAAAAAAAAAAAAAA    08-AUG-19 12.49.03.922879 PM +00:00 08-AUG-19 12.49.03.922885 PM +00:00 master key
+AWkmwKVV4E+iv0T2YGfadKIAAAAAAAAAAAAAAAAAAAAAAAAAAAAA    08-AUG-19 12.49.34.267593 PM +00:00 08-AUG-19 12.49.34.267595 PM +00:00 master key
+
+
+
+
+Exporting and Importing Keys
+Exporting and importing master key is useful in data guard configurations WHERE a new master key FROM primary DB could be exported and then imported in to standby key store.
+
+Exporting Master Key
+1. It is assumed that the key_id of the master key is know. If not query V$ENCRYPTION_KEYS to find out the key_id that requires exporting.
+2. Export the master key into key store by specifying the full path of the keystore file and the key_id.
+ADMINISTER KEY MANAGEMENT EXPORT KEYS WITH SECRET "exported key" TO '/home/oracle/exportedkey.p12' IDENTIFIED BY tde_key#$03 WITH IDENTIFIER IN 'AW/NN5gqQk//vwjnb0ibS9oAAAAAAAAAAAAAAAAAAAAAAAAAAAAA';
+
+Importing Master Key
+1. Key list before the import
+KEY_ID                                                       CREATION_TIME                       ACTIVATION_TIME                                                             TAG
+------------------------------------------------------------ ----------------------------------- --------------------------------------------------------------------------- --------------------
+AT5ixR4Mh0/QvwVvKtJEuhoAAAAAAAAAAAAAAAAAAAAAAAAAAAAA         12-AUG-19 09.55.39.156930 AM +00:00 12-AUG-19 09.55.39.156934 AM +00:00                                         new key
+ASxb82RXzk+5v+YrGLS1IYEAAAAAAAAAAAAAAAAAAAAAAAAAAAAA         08-AUG-19 02.46.00.225121 PM +00:00 08-AUG-19 02.46.00.225124 PM +00:00                                         new key
+AVxZXAgmCk/7v8O2MCHgs3cAAAAAAAAAAAAAAAAAAAAAAAAAAAAA         08-AUG-19 01.20.07.457233 PM +00:00 08-AUG-19 01.20.07.457236 PM +00:00                                         new key
+AXHy2i81kk8kvxb1e21UGHwAAAAAAAAAAAAAAAAAAAAAAAAAAAAA         08-AUG-19 01.19.10.390982 PM +00:00 08-AUG-19 01.19.10.390986 PM +00:00
+AUBz/7910k8mvzRinUjJI8sAAAAAAAAAAAAAAAAAAAAAAAAAAAAA         08-AUG-19 01.07.36.332802 PM +00:00 08-AUG-19 01.09.44.050057 PM +00:00                                         later key activates
+AWkmwKVV4E+iv0T2YGfadKIAAAAAAAAAAAAAAAAAAAAAAAAAAAAA         08-AUG-19 12.49.34.267593 PM +00:00 08-AUG-19 12.49.34.267595 PM +00:00                                         master key
+AQcbZpO6rk8xv6WYU5t7BjYAAAAAAAAAAAAAAAAAAAAAAAAAAAAA         08-AUG-19 12.49.03.922879 PM +00:00 08-AUG-19 12.49.03.922885 PM +00:00                                         master key
+
+2. Importing the earlier exported key.
+SQL> ADMINISTER KEY MANAGEMENT IMPORT KEYS WITH SECRET "exported key" FROM '/home/oracle/exportedkey.p12' IDENTIFIED BY tde_key#$03 with backup;
+
+3. Key list after import
+KEY_ID                                                       CREATION_TIME                       ACTIVATION_TIME                                                             TAG
+------------------------------------------------------------ ----------------------------------- --------------------------------------------------------------------------- --------------------
+AT5ixR4Mh0/QvwVvKtJEuhoAAAAAAAAAAAAAAAAAAAAAAAAAAAAA         12-AUG-19 09.55.39.156930 AM +00:00 12-AUG-19 09.55.39.156934 AM +00:00                                         new key
+AW/NN5gqQk//vwjnb0ibS9oAAAAAAAAAAAAAAAAAAAAAAAAAAAAA         08-AUG-19 02.47.09.861855 PM +00:00 08-AUG-19 02.47.09.861858 PM +00:00                                         new key
+ASxb82RXzk+5v+YrGLS1IYEAAAAAAAAAAAAAAAAAAAAAAAAAAAAA         08-AUG-19 02.46.00.225121 PM +00:00 08-AUG-19 02.46.00.225124 PM +00:00                                         new key
+AVxZXAgmCk/7v8O2MCHgs3cAAAAAAAAAAAAAAAAAAAAAAAAAAAAA         08-AUG-19 01.20.07.457233 PM +00:00 08-AUG-19 01.20.07.457236 PM +00:00                                         new key
+AXHy2i81kk8kvxb1e21UGHwAAAAAAAAAAAAAAAAAAAAAAAAAAAAA         08-AUG-19 01.19.10.390982 PM +00:00 08-AUG-19 01.19.10.390986 PM +00:00
+AUBz/7910k8mvzRinUjJI8sAAAAAAAAAAAAAAAAAAAAAAAAAAAAA         08-AUG-19 01.07.36.332802 PM +00:00 08-AUG-19 01.09.44.050057 PM +00:00                                         later key activates
+AWkmwKVV4E+iv0T2YGfadKIAAAAAAAAAAAAAAAAAAAAAAAAAAAAA         08-AUG-19 12.49.34.267593 PM +00:00 08-AUG-19 12.49.34.267595 PM +00:00                                         master key
+AQcbZpO6rk8xv6WYU5t7BjYAAAAAAAAAAAAAAAAAAAAAAAAAAAAA         08-AUG-19 12.49.03.922879 PM +00:00 08-AUG-19 12.49.03.922885 PM +00:00                                         master key
+
+
+Merging Keystores
+Multiple key stores could be merged to create a new key store or merge one key store with an existing key store. Advance security guide states "whether a common key FROM two source keystores is added or overwritten to a merged keystore depends on how you write the ADMINISTER KEY MANAGEMENT merge statement. For example, if you merge Keystore 1 and Keystore 2 to create Keystore 3, then the key in Keystore 1 is added to Keystore 3. If you merge Keystore 1 into Keystore 2, then the common key in Keystore 2 is not overwritten".
+Also unlike export and import the merge command doesn't take user specified keystore file names. It expect default file names, either ewallet.p12 or cwallet.sso.
+For following steps it's assumed a key store exists in location /home/oracle/Public and it has a key with id "ASxb82RXzk+5v+YrGLS1IYEAAAAAAAAAAAAAAAAAAAAAAAAAAAAA".
+1. Key list before merge
+KEY_ID                                                       CREATION_TIME                       ACTIVATION_TIME                                                             TAG
+------------------------------------------------------------ ----------------------------------- --------------------------------------------------------------------------- --------------------
+AT5ixR4Mh0/QvwVvKtJEuhoAAAAAAAAAAAAAAAAAAAAAAAAAAAAA         12-AUG-19 09.55.39.156930 AM +00:00 12-AUG-19 09.55.39.156934 AM +00:00                                         new key
+AW/NN5gqQk//vwjnb0ibS9oAAAAAAAAAAAAAAAAAAAAAAAAAAAAA         08-AUG-19 02.47.09.861855 PM +00:00 08-AUG-19 02.47.09.861858 PM +00:00                                         new key
+AVxZXAgmCk/7v8O2MCHgs3cAAAAAAAAAAAAAAAAAAAAAAAAAAAAA         08-AUG-19 01.20.07.457233 PM +00:00 08-AUG-19 01.20.07.457236 PM +00:00                                         new key
+AXHy2i81kk8kvxb1e21UGHwAAAAAAAAAAAAAAAAAAAAAAAAAAAAA         08-AUG-19 01.19.10.390982 PM +00:00 08-AUG-19 01.19.10.390986 PM +00:00
+AUBz/7910k8mvzRinUjJI8sAAAAAAAAAAAAAAAAAAAAAAAAAAAAA         08-AUG-19 01.07.36.332802 PM +00:00 08-AUG-19 01.09.44.050057 PM +00:00                                         later key activates
+AWkmwKVV4E+iv0T2YGfadKIAAAAAAAAAAAAAAAAAAAAAAAAAAAAA         08-AUG-19 12.49.34.267593 PM +00:00 08-AUG-19 12.49.34.267595 PM +00:00                                         master key
+AQcbZpO6rk8xv6WYU5t7BjYAAAAAAAAAAAAAAAAAAAAAAAAAAAAA         08-AUG-19 12.49.03.922879 PM +00:00 08-AUG-19 12.49.03.922885 PM +00:00                                         master key
+
+2. To merge a key store with an existing key store run the following command. The password for the key store at /home/oracle/Public is test.
+SQL> ADMINISTER KEY MANAGEMENT MERGE KEYSTORE '/home/oracle/Public' IDENTIFIED BY test INTO EXISTING KEYSTORE '/opt/app/oracle/wallet/tde' IDENTIFIED BY tde_key#$03 WITH BACKUP;
+
+3. The merged keys won't be visible without a reopening of the key store.
+KEY_ID                                                       CREATION_TIME                       ACTIVATION_TIME                                                             TAG
+------------------------------------------------------------ ----------------------------------- --------------------------------------------------------------------------- --------------------
+AT5ixR4Mh0/QvwVvKtJEuhoAAAAAAAAAAAAAAAAAAAAAAAAAAAAA         12-AUG-19 09.55.39.156930 AM +00:00 12-AUG-19 09.55.39.156934 AM +00:00                                         new key
+AW/NN5gqQk//vwjnb0ibS9oAAAAAAAAAAAAAAAAAAAAAAAAAAAAA         08-AUG-19 02.47.09.861855 PM +00:00 08-AUG-19 02.47.09.861858 PM +00:00                                         new key
+AVxZXAgmCk/7v8O2MCHgs3cAAAAAAAAAAAAAAAAAAAAAAAAAAAAA         08-AUG-19 01.20.07.457233 PM +00:00 08-AUG-19 01.20.07.457236 PM +00:00                                         new key
+AXHy2i81kk8kvxb1e21UGHwAAAAAAAAAAAAAAAAAAAAAAAAAAAAA         08-AUG-19 01.19.10.390982 PM +00:00 08-AUG-19 01.19.10.390986 PM +00:00
+AUBz/7910k8mvzRinUjJI8sAAAAAAAAAAAAAAAAAAAAAAAAAAAAA         08-AUG-19 01.07.36.332802 PM +00:00 08-AUG-19 01.09.44.050057 PM +00:00                                         later key activates
+AWkmwKVV4E+iv0T2YGfadKIAAAAAAAAAAAAAAAAAAAAAAAAAAAAA         08-AUG-19 12.49.34.267593 PM +00:00 08-AUG-19 12.49.34.267595 PM +00:00                                         master key
+AQcbZpO6rk8xv6WYU5t7BjYAAAAAAAAAAAAAAAAAAAAAAAAAAAAA         08-AUG-19 12.49.03.922879 PM +00:00 08-AUG-19 12.49.03.922885 PM +00:00                                         master key
+
+SQL> ADMINISTER KEY MANAGEMENT SET KEYSTORE close;
+
+SQL> ADMINISTER KEY MANAGEMENT SET KEYSTORE Open identified by tde_key#$03;
+
+KEY_ID                                                       CREATION_TIME                       ACTIVATION_TIME                                                             TAG
+------------------------------------------------------------ ----------------------------------- --------------------------------------------------------------------------- --------------------
+AT5ixR4Mh0/QvwVvKtJEuhoAAAAAAAAAAAAAAAAAAAAAAAAAAAAA         12-AUG-19 09.55.39.156930 AM +00:00 12-AUG-19 09.55.39.156934 AM +00:00                                         new key
+AW/NN5gqQk//vwjnb0ibS9oAAAAAAAAAAAAAAAAAAAAAAAAAAAAA         08-AUG-19 02.47.09.861855 PM +00:00 08-AUG-19 02.47.09.861858 PM +00:00                                         new key
+ASxb82RXzk+5v+YrGLS1IYEAAAAAAAAAAAAAAAAAAAAAAAAAAAAA         08-AUG-19 02.46.00.225121 PM +00:00 08-AUG-19 02.46.00.225124 PM +00:00                                         new key
+AVxZXAgmCk/7v8O2MCHgs3cAAAAAAAAAAAAAAAAAAAAAAAAAAAAA         08-AUG-19 01.20.07.457233 PM +00:00 08-AUG-19 01.20.07.457236 PM +00:00                                         new key
+AXHy2i81kk8kvxb1e21UGHwAAAAAAAAAAAAAAAAAAAAAAAAAAAAA         08-AUG-19 01.19.10.390982 PM +00:00 08-AUG-19 01.19.10.390986 PM +00:00
+AUBz/7910k8mvzRinUjJI8sAAAAAAAAAAAAAAAAAAAAAAAAAAAAA         08-AUG-19 01.07.36.332802 PM +00:00 08-AUG-19 01.09.44.050057 PM +00:00                                         later key activates
+AWkmwKVV4E+iv0T2YGfadKIAAAAAAAAAAAAAAAAAAAAAAAAAAAAA         08-AUG-19 12.49.34.267593 PM +00:00 08-AUG-19 12.49.34.267595 PM +00:00                                         master key
+AQcbZpO6rk8xv6WYU5t7BjYAAAAAAAAAAAAAAAAAAAAAAAAAAAAA         08-AUG-19 12.49.03.922879 PM +00:00 08-AUG-19 12.49.03.922885 PM +00:00                                         master key
+
+
+Change Keystore Password
+1. Key store password could be changed by specifying the old password and the new password.
+ADMINISTER KEY MANAGEMENT ALTER KEYSTORE PASSWORD FORCE KEYSTORE 
+IDENTIFIED BY key#st0r403 --old password
+SET tde_key#$03  -- new password
+WITH BACKUP USING 'pwd_change';
+2. The auto login file also gets updated with the new password.
+-rw-------. 1 oracle asmadmin 14091 Aug 13 09:29 ewallet_2019081309291420_pwd_change.p12
+-rw-------. 1 oracle oinstall 14091 Aug 13 09:29 ewallet.p12
+-rw-------. 1 oracle asmadmin 14136 Aug 13 09:29 cwallet.sso
+
+
+
+Encrypted Tablespace Creation
+Encrypted tablespaces could be created when TDE is enabled. Any data placed on the encrypted tablespace would be encrpted at rest and on redo logs including shipped redo logs. Example DDL for creating tablespaces is shown below.
+create tablespace enctest datafile '+data(datafile)' size 1g 
+autoextend on next 1g maxsize unlimited 
+ENCRYPTION using 'AES256' 
+DEFAULT STORAGE(ENCRYPT);
+
+Data Pump Export and Import with Encryption
+
+Exporting
+Even when TDE is setup if encryption parameters are not used in expdp, the resulting dump file will be unencrypted.
+expdp asanga/asa directory=DATA_PUMP_DIR dumpfile=asa2.dmp schemas=asanga
+
+strings /opt/app/oracle/admin/masterdb/dpdump/asa2.dmp | grep hello*
+  hellodx13<
+        hellodx14<
+        hellodx15<
+        hellodx16< 
+To encrypt an export use encryption_mode and encryption paramters.
+expdp asanga/asa directory=DATA_PUMP_DIR dumpfile=asa2.dmp schemas=asanga ENCRYPTION_MODE=TRANSPARENT ENCRYPTION=all
+The resulting dump file is encrypted.
+
+Importing
+To import FROM an encrypted, simply run the import command as usual provided TDE is setup and wallet is open.
+impdp asanga/asa directory=DATA_PUMP_DIR dumpfile=asa2.dmp tables=ABC
+
+RMAN Backup with Encryption
+There are multiple ways to enable encryption for backups. The easiest and simplest way is to configure default rman configuration to use encryption.
+CONFIGURE ENCRYPTION FOR DATABASE ON;
+CONFIGURE ENCRYPTION ALGORITHM 'AES256';
+This will make every backup run an ecnrypted backup.
+RMAN> backup datafile 5 tag='default backup';
+
+TAG                              ENC
+-------------------------------- ---
+DEFAULT BACKUP                   YES
+This could be overriden with set encryption.
+RMAN> set encryption off;
+RMAN> backup datafile 5 tag='enc off';
+
+TAG                              ENC
+-------------------------------- ---
+ENC OFF                          NO
+If an tablespace is already encrypted and backup taken is an encrypted backup then the encrypted blocks are passed through to backup unchnaged. Only the uncrypted blocks are encrypted during backup. For more on various combinations of encryption and compression refer here.
+
+Delete Keystore and Issues
+As per Oracle documentation there's no single command to delete the keystore and it's strongly recommended against doing so. As per MOS 1541818.1 it is not allowed to remove the wallet even if no encrypted objects were created.
+But if it has to be done (for testing purposes only. For production follow Oracle recommendation and don't remove the wallet) best course of action is to stop using the encryption feature first. This means any data on encrypted tablespaces or columns moved into unencrypted tablespaces, stoping encrypted backup configuration and etc. Afterwards move the master key to a different key store. Do few redo log file switches so any encryption information on the redo logs are flushed. Only then remove the key store files.
+Extra care must be taken when a data guard is invovled. During testing related to this post, removal of keystore files on a data guard configuration always failed on the standby even after several rounds of log file switching (which is one of the oracle suggestions on 1541818.1).
+Even if the database doesn't give any errors after removing the key store, any subsequent creation of keystore will fail with the following.
+ADMINISTER KEY MANAGEMENT SET KEY USING TAG 'master key' IDENTIFIED BY cg_key#st0r3 WITH BACKUP USING 'masterbackup'
+*
+ERROR at line 1:
+ORA-28374: typed master key not found in wallet
+As said on above MOS note this is expected behavior once keystore is removed on 12c or above.
+However, there's a hidden parameter to avoid this error.
+SQL> alter system set "_db_discard_lost_masterkey"=true scope=memory;
+Apprentely there was a MOS doc specifying setting this parameter to avoid the error. But it has been removed now. Though this does work (try only on testing environments) it can lead to database corruption and issue mentioned on 2129808.1. When this parameter is set the following could be observed on the alert log.
+2019-08-08T11:02:52.056923+00:00
+ALTER SYSTEM SET _db_discard_lost_masterkey=TRUE SCOPE=MEMORY;
+2019-08-08T11:02:58.655563+00:00
+Recreating master key and database key for lost wallet
+Creating new database key with the new master key
+Warning: replacing lost SYSAUX key with new database key due to prior wallet deletion.
+Encrypted blocks in SYSAUX tablespace would appear corrupted, since the original key is replaced. (ts# 0/1, file# 2)
+Warning: Tablespace 0/2 file 3 contains stale master key due to prior wallet deletion.
+Please drop and recreate this tablespace. Encrypted blocks would appear corrupted, since the original key is lost
+Warning: Tablespace 0/3 file 201 contains stale master key due to prior wallet deletion.
+Please drop and recreate this tablespace. Encrypted blocks would appear corrupted, since the original key is lost
+Switching out all online logs for the new master key
+2019-08-08T11:02:58.742617+00:00
+Thread 1 advanced to log sequence 108 (LGWR switch)
+  Current log# 3 seq# 108 mem# 0: +DATA/GOLD/ONLINELOG/group_3.259.1004609727
+  Current log# 3 seq# 108 mem# 1: +FRA/GOLD/ONLINELOG/group_3.259.1004609733
+2019-08-08T11:02:58.758852+00:00
+Logfile switch for new master key complete
+New database key and new master key created successfully
+It's not an error but an interesting warning which says encrypted blocks may appear as corrupted. If this scenario of deleting key store and creating new with the help of hidden parameter is done enough times eventually it would lead to corruption of a datafile as shown below.
+Errors in file /opt/app/oracle/diag/rdbms/gold/gold/trace/gold_smon_3619.trc:
+ORA-01595: error freeing extent (40) of rollback segment (6))
+ORA-28304: Oracle encrypted block is corrupt (file # 3, block # 31408)
+ORA-01110: data file 3: '+DATA/GOLD/DATAFILE/undotbs1.262.1004609779'
+
+
+2019-08-08T12:24:11.588626+00:00
+Corrupt Block Found
+         TIME STAMP (GMT) = 08/08/2019 12:24:11
+         CONT = 0, TSN = 2, TSNAME = UNDOTBS1
+         RFN = 3, BLK = 18242, RDBA = 12601154
+         OBJN = 0, OBJD = -1, OBJECT = , SUBOBJECT =
+         SEGMENT OWNER = , SEGMENT TYPE =
+Bottom line is there's no way to cleanly remove wallet once created. On 12c and above Oracle's official position is it cannot be removed.
+
+Another issue that's possible to encounter is the wallet is not open error. For example when import key is run it is possible to encounter the following.
+SQL>  ADMINISTER KEY MANAGEMENT IMPORT KEYS WITH SECRET "exported key" FROM '/home/oracle/exportedkey.p12' IDENTIFIED BY tde_key#$03 with backup;
+ ADMINISTER KEY MANAGEMENT IMPORT KEYS WITH SECRET "exported key" FROM '/home/oracle/exportedkey.p12' IDENTIFIED BY tde_key#$03 with backup
+*
+ERROR at line 1:
+ORA-28417: password-based keystore is not open
+But when oepn command is issued, the wallet is already open error is shown.
+SQL> ADMINISTER KEY MANAGEMENT SET KEYSTORE OPEN IDENTIFIED BY  cg_key#st0r3;
+ADMINISTER KEY MANAGEMENT SET KEYSTORE OPEN IDENTIFIED BY  tde_key#$03
+*
+ERROR at line 1:
+ORA-28354: Encryption wallet, auto login wallet, or HSM is already open
+To resolve this manually backup the auto login file on OS and then close and open the wallet.
+SQL> ! mv cwallet.sso cwallet.sso.bak
+
+SQL>  ADMINISTER KEY MANAGEMENT SET KEYSTORE close;
+
+keystore altered.
+
+SQL> ADMINISTER KEY MANAGEMENT SET KEYSTORE OPEN IDENTIFIED BY  cg_key#st0r3;
+
+keystore altered.

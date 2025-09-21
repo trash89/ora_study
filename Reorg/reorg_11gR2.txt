@@ -1,0 +1,386 @@
+-- oracle 11gR2
+
+-- moving datafiles
+ALTER TABLESPACE TPCH OFFLINE NORMAL;
+host mv /u01/app/oracle/product/11.2.0.4/db_1/dbs/data_tpchlike.dbf /u02/oradata/DB11G/data_tpchlike.dbf
+ALTER TABLESPACE TPCH RENAME DATAFILE '/u01/app/oracle/product/11.2.0.4/db_1/dbs/data_tpchlike.dbf' TO '/u02/oradata/DB11G/data_tpchlike.dbf';
+ALTER TABLESPACE TPCH ONLINE;
+
+ALTER TABLESPACE TPCHINDEXES OFFLINE NORMAL;
+host mv /u01/app/oracle/product/11.2.0.4/db_1/dbs/indx_tpchlike.dbf /u02/oradata/DB11G/indx_tpchlike.dbf
+ALTER TABLESPACE TPCHINDEXES RENAME DATAFILE '/u01/app/oracle/product/11.2.0.4/db_1/dbs/indx_tpchlike.dbf' TO '/u02/oradata/DB11G/indx_tpchlike.dbf';
+ALTER TABLESPACE TPCHINDEXES ONLINE;
+
+
+alter table SCOTT.DUMMY move tablespace scott_data parallel 2;
+alter table SCOTT.SALGRADE move tablespace scott_data parallel 2;
+
+alter table SCOTT.DEPT  move partition P_10         tablespace scott_data update indexes parallel 2;
+alter table SCOTT.DEPT  move partition P_20         tablespace scott_data update indexes parallel 2;
+alter table SCOTT.DEPT  move partition P_30         tablespace scott_data update indexes parallel 2;
+alter table SCOTT.DEPT  move partition P_40         tablespace scott_data update indexes parallel 2;
+alter table SCOTT.DEPT  move partition P_OTHERS     tablespace scott_data update indexes parallel 2;
+alter table SCOTT.EMP   move partition P_10         tablespace scott_data update indexes parallel 2;
+alter table SCOTT.EMP   move partition P_20         tablespace scott_data update indexes parallel 2;
+alter table SCOTT.EMP   move partition P_30         tablespace scott_data update indexes parallel 2;
+alter table SCOTT.EMP   move partition P_40         tablespace scott_data update indexes parallel 2;
+alter table SCOTT.EMP   move partition P_OTHERS     tablespace scott_data update indexes parallel 2;
+
+alter table scott.dept modify default attributes tablespace scott_data;
+alter table scott.emp modify default attributes tablespace scott_data;
+
+
+-- non partitioned indexes
+alter index SCOTT.PK_DEPT   rebuild tablespace scott_indx parallel 2 online;
+alter index SCOTT.PK_EMP    rebuild tablespace scott_indx parallel 2 online;
+
+-- rebuild partitioned indexes
+alter index SCOTT.EMP_IDX rebuild partition P_10        tablespace scott_indx parallel 2 online;
+alter index SCOTT.EMP_IDX rebuild partition P_20        tablespace scott_indx parallel 2 online;
+alter index SCOTT.EMP_IDX rebuild partition P_30        tablespace scott_indx parallel 2 online;
+alter index SCOTT.EMP_IDX rebuild partition P_40        tablespace scott_indx parallel 2 online;
+alter index SCOTT.EMP_IDX rebuild partition P_OTHERS    tablespace scott_indx parallel 2 online;
+
+alter table SCOTT.TEST_LOB move tablespace scott_data parallel 2;
+alter table SCOTT.TEST_LOB move lob (AWLOB) store as ( tablespace scott_lob) parallel 2;
+
+
+-- reog OE
+
+alter table OE.PROMOTIONS                       move tablespace oe_data parallel 2;
+alter table OE.WAREHOUSES                       move tablespace oe_data parallel 2;
+alter table OE.ORDERS                           move tablespace oe_data parallel 2;
+alter table OE.PRODUCT_INFORMATION              move tablespace oe_data parallel 2;
+alter table OE.CUSTOMERS                        move tablespace oe_data parallel 2;
+alter table OE.ORDER_ITEMS                      move tablespace oe_data parallel 2;
+alter table OE.INVENTORIES                      move tablespace oe_data parallel 2;
+alter table OE.PRODUCT_DESCRIPTIONS             move tablespace oe_data parallel 2;
+alter table OE.CATEGORIES_TAB                   move tablespace oe_data parallel 2;
+alter table OE.PURCHASEORDER                    move tablespace oe_data parallel 2;
+
+alter table OE.SUBCATEGORY_REF_LIST_NESTEDTAB   move tablespace oe_lob parallel 2;
+alter table OE.PRODUCT_REF_LIST_NESTEDTAB       move tablespace oe_lob parallel 2;
+
+ALTER TABLE OE.ACTION_TABLE MOVE TABLESPACE oe_lob parallel 2
+    VARRAY SYS_XDBPD$ STORE AS LOB(TABLESPACE oe_lob)
+;
+
+ALTER TABLE OE.CUSTOMERS MOVE TABLESPACE oe_lob parallel 2
+    VARRAY "CUST_GEO_LOCATION"."SDO_ELEM_INFO" STORE AS LOB(TABLESPACE oe_lob)
+    VARRAY "CUST_GEO_LOCATION"."SDO_ORDINATES" STORE AS LOB(TABLESPACE oe_lob)
+;
+
+ALTER TABLE OE.LINEITEM_TABLE MOVE TABLESPACE oe_lob parallel 2
+    VARRAY "PART"."SYS_XDBPD$"  STORE AS LOB(TABLESPACE oe_lob)
+    VARRAY SYS_XDBPD$           STORE AS LOB(TABLESPACE oe_lob)
+;
+
+ALTER TABLE OE.PURCHASEORDER MOVE TABLESPACE oe_lob  parallel 2
+    VARRAY "XMLDATA"."ACTIONS"."SYS_XDBPD$"                 STORE AS LOB(TABLESPACE oe_lob)
+    VARRAY "XMLDATA"."LINEITEMS"."SYS_XDBPD$"               STORE AS LOB(TABLESPACE oe_lob)
+	VARRAY "XMLDATA"."REJECTION"."SYS_XDBPD$"               STORE AS LOB(TABLESPACE oe_lob)
+	VARRAY "XMLDATA"."SHIPPING_INSTRUCTIONS"."SYS_XDBPD$"   STORE AS LOB(TABLESPACE oe_lob)
+	VARRAY "XMLDATA"."SYS_XDBPD$"                           STORE AS LOB(TABLESPACE oe_lob)
+	VARRAY "XMLEXTRA"."EXTRADATA"                           STORE AS LOB(TABLESPACE oe_lob)
+	VARRAY "XMLEXTRA"."NAMESPACES"                          STORE AS LOB(TABLESPACE oe_lob)
+;
+
+ALTER TABLE OE.WAREHOUSES MOVE TABLESPACE oe_lob parallel 2
+    VARRAY "WH_GEO_LOCATION"."SDO_ELEM_INFO" STORE AS LOB(TABLESPACE oe_lob)
+    VARRAY "WH_GEO_LOCATION"."SDO_ORDINATES" STORE AS LOB(TABLESPACE oe_lob)
+;
+alter table OE.WAREHOUSES move TABLESPACE oe_lob  parallel 2
+    lob (SYS_NC00003$) store as ( tablespace OE_lob)
+;
+
+alter index OE.CUSTOMERS_PK             rebuild tablespace oe_indx parallel 2 online;
+alter index OE.CUST_ACCOUNT_MANAGER_IX  rebuild tablespace oe_indx parallel 2 online;
+alter index OE.CUST_EMAIL_IX            rebuild tablespace oe_indx parallel 2 online;
+alter index OE.CUST_LNAME_IX            rebuild tablespace oe_indx parallel 2 online;
+alter index OE.CUST_UPPER_NAME_IX       rebuild tablespace oe_indx parallel 2 online;
+alter index OE.INVENTORY_IX             rebuild tablespace oe_indx parallel 2 online;
+alter index OE.INV_PRODUCT_IX           rebuild tablespace oe_indx parallel 2 online;
+alter index OE.ITEM_ORDER_IX            rebuild tablespace oe_indx parallel 2 online;
+alter index OE.ITEM_PRODUCT_IX          rebuild tablespace oe_indx parallel 2 online;
+alter index OE.ORDER_ITEMS_PK           rebuild tablespace oe_indx parallel 2 online;
+alter index OE.ORDER_ITEMS_UK           rebuild tablespace oe_indx parallel 2 online;
+alter index OE.ORDER_PK                 rebuild tablespace oe_indx parallel 2 online;
+alter index OE.ORD_CUSTOMER_IX          rebuild tablespace oe_indx parallel 2 online;
+alter index OE.ORD_ORDER_DATE_IX        rebuild tablespace oe_indx parallel 2 online;
+alter index OE.ORD_SALES_REP_IX         rebuild tablespace oe_indx parallel 2 online;
+alter index OE.PRD_DESC_PK              rebuild tablespace oe_indx parallel 2 online;
+alter index OE.PRODUCT_INFORMATION_PK   rebuild tablespace oe_indx parallel 2 online;
+alter index OE.PROD_NAME_IX             rebuild tablespace oe_indx parallel 2 online;
+alter index OE.PROD_SUPPLIER_IX         rebuild tablespace oe_indx parallel 2 online;
+alter index OE.PROMO_ID_PK              rebuild tablespace oe_indx parallel 2 online;
+alter index OE.WAREHOUSES_PK            rebuild tablespace oe_indx parallel 2 online;
+alter index OE.WHS_LOCATION_IX          rebuild tablespace oe_indx parallel 2 online;
+alter index OE.LINEITEM_TABLE_MEMBERS   rebuild tablespace oe_indx parallel 2 online;
+alter index OE.ACTION_TABLE_MEMBERS     rebuild tablespace oe_indx parallel 2 online;
+alter index OE.SYS_C0011033             rebuild tablespace oe_indx parallel 2 online;
+alter index OE.SYS_C0011034             rebuild tablespace oe_indx parallel 2 online;
+alter index OE.SYS_C0011037             rebuild tablespace oe_indx parallel 2 online;
+alter index OE.SYS_C0011038             rebuild tablespace oe_indx parallel 2 online;
+alter index OE.SYS_C0011039             rebuild tablespace oe_indx parallel 2 online;
+alter index OE.SYS_C0011040             rebuild tablespace oe_indx parallel 2 online;
+alter index OE.SYS_C0011041             rebuild tablespace oe_indx parallel 2 online;
+alter index OE.SYS_FK0000074515N00007$  rebuild tablespace oe_indx parallel 2 online;
+alter index OE.SYS_FK0000074515N00009$  rebuild tablespace oe_indx parallel 2 online;
+
+
+--- user HR
+
+alter table HR.REGIONS          move tablespace hr_data parallel 2;
+alter table HR.JOB_HISTORY      move tablespace hr_data parallel 2;
+alter table HR.JOBS             move tablespace hr_data parallel 2;
+alter table HR.LOCATIONS        move tablespace hr_data parallel 2;
+alter table HR.DEPARTMENTS      move tablespace hr_data parallel 2;
+alter table HR.EMPLOYEES        move tablespace hr_data parallel 2;
+
+-- IOT table
+alter table HR.COUNTRIES        move tablespace hr_indx parallel 2;
+
+alter index HR.DEPT_ID_PK               rebuild tablespace hr_indx parallel 2 online;
+alter index HR.DEPT_LOCATION_IX         rebuild tablespace hr_indx parallel 2 online;
+alter index HR.EMP_DEPARTMENT_IX        rebuild tablespace hr_indx parallel 2 online;
+alter index HR.EMP_EMAIL_UK             rebuild tablespace hr_indx parallel 2 online;
+alter index HR.EMP_EMP_ID_PK            rebuild tablespace hr_indx parallel 2 online;
+alter index HR.EMP_JOB_IX               rebuild tablespace hr_indx parallel 2 online;
+alter index HR.EMP_MANAGER_IX           rebuild tablespace hr_indx parallel 2 online;
+alter index HR.EMP_NAME_IX              rebuild tablespace hr_indx parallel 2 online;
+alter index HR.JHIST_DEPARTMENT_IX      rebuild tablespace hr_indx parallel 2 online;
+alter index HR.JHIST_EMPLOYEE_IX        rebuild tablespace hr_indx parallel 2 online;
+alter index HR.JHIST_EMP_ID_ST_DATE_PK  rebuild tablespace hr_indx parallel 2 online;
+alter index HR.JHIST_JOB_IX             rebuild tablespace hr_indx parallel 2 online;
+alter index HR.JOB_ID_PK                rebuild tablespace hr_indx parallel 2 online;
+alter index HR.LOC_CITY_IX              rebuild tablespace hr_indx parallel 2 online;
+alter index HR.LOC_COUNTRY_IX           rebuild tablespace hr_indx parallel 2 online;
+alter index HR.LOC_ID_PK                rebuild tablespace hr_indx parallel 2 online;
+alter index HR.LOC_STATE_PROVINCE_IX    rebuild tablespace hr_indx parallel 2 online;
+alter index HR.REG_ID_PK                rebuild tablespace hr_indx parallel 2 online;
+
+
+--- user IX
+
+-- get the path of DIRECTORY data_pump_dir
+cat <<END > /tmp/get_data_pump_dir.sql
+connect / as sysdba
+set lines 200 pages 0 echo off head off trim off trims off feed off
+rem alter session set container=pdb1;
+SELECT trim(directory_path) FROM dba_directories WHERE directory_name='DATA_PUMP_DIR';
+exit
+END
+vdir_path=$(${ORACLE_HOME}/bin/sqlplus -L -S /nolog @/tmp/get_data_pump_dir.sql | tr -d '\r' | tr -d ' ' | tr -d '\n')
+rm -f /tmp/get_data_pump_dir.sql
+echo $vdir_path
+
+cat <<END > $vdir_path/ix_EXP.par
+directory       = data_pump_dir
+dumpfile        = ix.dmp
+logfile         = ix_EXP.log
+schemas         = IX
+exclude         = statistics
+FLASHBACK_TIME  = systimestamp
+END
+expdp system/manager parfile=$vdir_path/ix_EXP.par
+
+cat <<END > $vdir_path/ix_IMP.par
+directory       = data_pump_dir
+dumpfile        = ix.dmp
+logfile         = ix_IMP.log
+transform       = storage:n
+transform       = segment_attributes:n
+END
+impdp system/manager parfile=$vdir_path/ix_IMP.par
+
+
+-- user PM
+
+alter table PM.PRINT_MEDIA move tablespace pm_data parallel 2
+    lob (AD_COMPOSITE)      store as ( tablespace pm_lob)
+    lob (AD_SOURCETEXT)     store as ( tablespace pm_lob)
+    lob (AD_FINALTEXT)      store as ( tablespace pm_lob)
+    lob (AD_FLTEXTN)        store as ( tablespace pm_lob)
+    lob (AD_PHOTO)          store as ( tablespace pm_lob)
+;
+
+alter table PM.ONLINE_MEDIA move tablespace pm_data parallel 2
+    lob (PRODUCT_TEXT)                                  store as ( tablespace pm_lob)
+    lob ("PRODUCT_PHOTO"."SOURCE"."LOCALDATA")          store as ( tablespace pm_lob)
+    lob ("PRODUCT_VIDEO"."COMMENTS")                    store as ( tablespace pm_lob)
+    lob ("PRODUCT_AUDIO"."SOURCE"."LOCALDATA")          store as ( tablespace pm_lob)
+    lob ("PRODUCT_VIDEO"."SOURCE"."LOCALDATA")          store as ( tablespace pm_lob)
+    lob ("PRODUCT_AUDIO"."COMMENTS")                    store as ( tablespace pm_lob)
+    lob ("PRODUCT_PHOTO_SIGNATURE"."SIGNATURE")         store as ( tablespace pm_lob)
+    lob ("PRODUCT_TESTIMONIALS"."COMMENTS")             store as ( tablespace pm_lob)
+    lob ("PRODUCT_TESTIMONIALS"."SOURCE"."LOCALDATA")   store as ( tablespace pm_lob)
+    lob ("PRODUCT_THUMBNAIL"."SOURCE"."LOCALDATA")      store as ( tablespace pm_lob)
+;
+
+alter table PM.PRINT_MEDIA move tablespace pm_data parallel 2
+    lob ("AD_HEADER"."LOGO") store as ( tablespace pm_lob)
+;
+
+alter table PM.TEXTDOCS_NESTEDTAB move tablespace pm_data parallel 2 
+    lob(FORMATTED_DOC)  store as ( tablespace pm_lob)
+;
+
+alter index PM.PRINTMEDIA_PK            rebuild tablespace pm_indx parallel 2 online;
+alter index PM.ONLINEMEDIA_PK           rebuild tablespace pm_indx parallel 2 online;
+alter index PM.SYS_C0010844             rebuild tablespace pm_indx parallel 2 online;
+alter index PM.SYS_FK0000073534N00007$  rebuild tablespace pm_indx parallel 2 online;
+
+-- user SH
+
+
+alter table SH.DIMENSION_EXCEPTIONS move tablespace sh_data parallel 2;
+alter table SH.CHANNELS                     move tablespace sh_data parallel 2;
+alter table SH.COUNTRIES                    move tablespace sh_data parallel 2;
+alter table SH.CAL_MONTH_SALES_MV           move tablespace sh_data parallel 2;
+alter table SH.PRODUCTS                     move tablespace sh_data parallel 2;
+alter table SH.PROMOTIONS                   move tablespace sh_data parallel 2;
+alter table SH.TIMES                        move tablespace sh_data parallel 2;
+alter table SH.SUPPLEMENTARY_DEMOGRAPHICS   move tablespace sh_data parallel 2;
+alter table SH.FWEEK_PSCAT_SALES_MV         move tablespace sh_data parallel 2;
+alter table SH.CUSTOMERS                    move tablespace sh_data parallel 2;
+alter table SH.DR$SUP_TEXT_IDX$I            move tablespace sh_data parallel 2;
+alter table SH.DR$SUP_TEXT_IDX$R            move tablespace sh_data parallel 2;
+
+alter table SH.COSTS modify default attributes tablespace sh_data;
+alter table SH.SALES modify default attributes tablespace sh_data;
+
+
+alter index SH.DR$SUP_TEXT_IDX$X            rebuild tablespace sh_indx parallel 2 online;
+alter index SH.PRODUCTS_PROD_STATUS_BIX     rebuild tablespace sh_indx parallel 2 online;
+alter index SH.FW_PSC_S_MV_CHAN_BIX         rebuild tablespace sh_indx parallel 2 online;
+alter index SH.FW_PSC_S_MV_PROMO_BIX        rebuild tablespace sh_indx parallel 2 online;
+alter index SH.CHANNELS_PK                  rebuild tablespace sh_indx parallel 2 online;
+alter index SH.CUSTOMERS_GENDER_BIX         rebuild tablespace sh_indx parallel 2 online;
+alter index SH.CUSTOMERS_MARITAL_BIX        rebuild tablespace sh_indx parallel 2 online;
+alter index SH.FW_PSC_S_MV_SUBCAT_BIX       rebuild tablespace sh_indx parallel 2 online;
+alter index SH.COUNTRIES_PK                 rebuild tablespace sh_indx parallel 2 online;
+alter index SH.TIMES_PK                     rebuild tablespace sh_indx parallel 2 online;
+alter index SH.CUSTOMERS_PK                 rebuild tablespace sh_indx parallel 2 online;
+alter index SH.FW_PSC_S_MV_WD_BIX           rebuild tablespace sh_indx parallel 2 online;
+alter index SH.PROMO_PK                     rebuild tablespace sh_indx parallel 2 online;
+alter index SH.PRODUCTS_PROD_CAT_IX         rebuild tablespace sh_indx parallel 2 online;
+alter index SH.PRODUCTS_PK                  rebuild tablespace sh_indx parallel 2 online;
+alter index SH.PRODUCTS_PROD_SUBCAT_IX      rebuild tablespace sh_indx parallel 2 online;
+alter index SH.CUSTOMERS_YOB_BIX            rebuild tablespace sh_indx parallel 2 online;
+
+
+alter table SH.COSTS move partition COSTS_1995		 tablespace sh_data update indexes parallel 2;
+
+alter index SH.COSTS_PROD_BIX rebuild partition COSTS_1995		 tablespace sh_indx parallel 2 online;
+
+alter materialized view SH.CAL_MONTH_SALES_MV compile;
+alter materialized view SH.FWEEK_PSCAT_SALES_MV compile;
+
+
+alter table SH.DR$SUP_TEXT_IDX$I move tablespace sh_data parallel 2 
+    lob(TOKEN_INFO)  store as ( tablespace sh_lob)
+;
+
+alter table SH.DR$SUP_TEXT_IDX$R move tablespace sh_data parallel 2 
+    lob(DATA)  store as ( tablespace sh_lob)
+;
+
+alter table sh.DR$SUP_TEXT_IDX$K move tablespace sh_indx parallel 2 ;
+alter table sh.DR$SUP_TEXT_IDX$N move tablespace sh_indx parallel 2 ;
+
+alter index SH.SUP_TEXT_IDX rebuild;
+
+-- Exports users BI,HR,IX,OE,PM
+
+--- user BI,HR,IX,OE,PM
+
+-- get the path of DIRECTORY data_pump_dir
+cat <<END > /tmp/get_data_pump_dir.sql
+connect / as sysdba
+set lines 200 pages 0 echo off head off trim off trims off feed off
+SELECT trim(directory_path) FROM dba_directories WHERE directory_name='DATA_PUMP_DIR';
+exit
+END
+vdir_path=$(${ORACLE_HOME}/bin/sqlplus -L -S /nolog @/tmp/get_data_pump_dir.sql | tr -d '\r' | tr -d ' ' | tr -d '\n')
+rm -f /tmp/get_data_pump_dir.sql
+echo $vdir_path
+echo $ORACLE_SID
+
+-- export the EXAMPLES users 
+cat <<END > $vdir_path/users_examples_EXP.par
+directory       =   data_pump_dir
+dumpfile        =   users_examples%U.dmp
+logfile         =   users_examples_EXP.log
+parallel        =   2
+filesize        =   2G
+schemas         =   BI,HR,IX,OE,PM
+exclude         =   statistics
+FLASHBACK_TIME  =   systimestamp
+END
+expdp system/manager parfile=$vdir_path/users_examples_EXP.par
+
+-- export the metadata for the EXAMPLES users
+cat <<END > $vdir_path/users_example_meta_EXP.par
+directory       =   data_pump_dir
+dumpfile        =   users_example_meta.dmp
+logfile         =   users_example_meta_EXP.log
+content         =   metadata_only
+schemas         =   BI,HR,IX,OE,PM
+exclude         =   statistics
+FLASHBACK_TIME  =   systimestamp
+END
+expdp system/manager parfile=$vdir_path/users_example_meta_EXP.par
+
+-- extract the sql definitions FROM the metadata export
+cat <<END > $vdir_path/users_example_meta_IMP.par
+directory   = data_pump_dir
+dumpfile    = users_example_meta.dmp
+logfile     = users_example_meta_IMP.log
+SQLFILE     = users_example_meta.sql
+#schemas    = scott
+transform   = storage:n
+transform   = segment_attributes:n
+END
+impdp system/manager parfile=$vdir_path/users_example_meta_IMP.par
+
+-- import the EXAMPLES users
+cat <<END > $vdir_path/users_examples_IMP.par
+directory       = data_pump_dir
+dumpfile        = users_examples%U.dmp
+logfile         = users_examples_IMP.log
+transform       = storage:n
+transform       = segment_attributes:n
+#schemas        = MOVIE
+parallel        = 2
+END
+impdp system/manager parfile=$vdir_path/users_examples_IMP.par
+
+Datafiles
+Status	   Enabled BigF Flb Bck    Incr TABLESPACE_NAME 		        Megs  Id FILE_NAME
+------------------------------- ------- ------------------------- ---------- --- ------------------------------------------------------------------------------------------
+ ONLINE READ WRITE   NO YES YES      80 EXAMPLE 			            2.00   5 /u02/oradata/DB11G/example01.dbf
+ ONLINE READ WRITE   NO YES YES     128 HR_DATA 			            8.00  12 /u02/oradata/DB11G/hr_data01.dbf
+ ONLINE READ WRITE   NO YES YES     128 HR_INDX 			            2.00  13 /u02/oradata/DB11G/hr_indx01.dbf
+ ONLINE READ WRITE   NO YES YES     128 IX_DATA 			            5.00  14 /u02/oradata/DB11G/ix_data01.dbf
+ ONLINE READ WRITE   NO YES YES     128 OE_DATA 		               19.00   9 /u02/oradata/DB11G/oe_data01.dbf
+ ONLINE READ WRITE   NO YES YES     128 OE_INDX 			            4.00  10 /u02/oradata/DB11G/oe_indx01.dbf
+ ONLINE READ WRITE   NO YES YES     128 OE_LOB				            9.00  11 /u02/oradata/DB11G/oe_lob01.dbf
+ ONLINE READ WRITE   NO YES YES     128 PM_DATA 			            1.00  15 /u02/oradata/DB11G/pm_data01.dbf
+ ONLINE READ WRITE   NO YES YES     128 PM_INDX 			            4.00  16 /u02/oradata/DB11G/pm_indx01.dbf
+ ONLINE READ WRITE   NO YES YES     128 PM_LOB			               23.00  17 /u02/oradata/DB11G/pm_lob01.dbf
+ ONLINE READ WRITE   NO YES YES     128 SCOTT_DATA		               18.00   6 /u02/oradata/DB11G/scott_data01.dbf
+ ONLINE READ WRITE   NO YES YES     128 SCOTT_INDX			            4.00   7 /u02/oradata/DB11G/scott_indx01.dbf
+ ONLINE READ WRITE   NO YES YES     128 SCOTT_LOB		               31.00   8 /u02/oradata/DB11G/scott_lob01.dbf
+ ONLINE READ WRITE   NO YES YES     128 SH_DATA 		               37.00  18 /u02/oradata/DB11G/sh_data01.dbf
+ ONLINE READ WRITE   NO YES YES     128 SH_INDX 		               22.00  19 /u02/oradata/DB11G/sh_indx01.dbf
+ ONLINE READ WRITE   NO YES YES     128 SH_LOB				            1.00  20 /u02/oradata/DB11G/sh_lob01.dbf
+ ONLINE READ WRITE   NO YES YES     160 USERS				            2.00   4 /u02/oradata/DB11G/users01.dbf
+
+Users
+BI			       OPEN		    SH_DATA		      TEMP			17/12/2024 05:51:55  N
+HR			       OPEN		    HR_DATA		      TEMP			17/12/2024 05:51:55  N
+IX			       OPEN		    IX_DATA		      TEMP			12/01/2025 18:07:27  N
+OE			       OPEN		    OE_DATA		      TEMP			17/12/2024 05:51:55  N
+PM			       OPEN		    PM_DATA		      TEMP			17/12/2024 05:51:55  N
+SCOTT		       OPEN		    SCOTT_DATA	      TEMP			15/08/2009 00:50:14  N
+SH			       OPEN		    SH_DATA		      TEMP			17/12/2024 05:51:55  N

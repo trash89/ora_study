@@ -1,0 +1,415 @@
+Encrypting Entire Tablespaces
+In order to use TDE tablespace encryption, you must be running Oracle Database 11g release 1 (11.1) or higher. 
+If you have upgraded FROM an earlier release, the compatibility for the database must have been set to 11.0.0 or higher.
+To use the enhanced tablespace encryption features in Oracle Database 11g Release 2 (11.2), 
+the compatibility for the database must be set to 11.2 or higher.
+
+export TNS_ADMIN=$ORACLE_HOME/network/admin 
+
+mkdir -p $ORACLE_BASE/admin/$ORACLE_SID/encryption_keystore/
+
+vi $ORACLE_HOME/network/admin/sqlnet.ora
+
+NAMES.DIRECTORY_PATH= (TNSNAMES, EZCONNECT)
+
+ENCRYPTION_WALLET_LOCATION=
+  (SOURCE=(METHOD=FILE)(METHOD_DATA=
+    (DIRECTORY=/u01/app/oracle/admin/DB11G/encryption_keystore)))
+
+
+lsnrctl stop
+lsnrctl start
+
+sqlplus / as sysdba << END
+shutdown immediate;
+startup;
+END
+
+sqlplus / as sysdba
+@show_tde10
+
+v$encryption_wallet
+STATUS			       WRL_TYPE 	    WRL_PARAMETER
+------------------------------ -------------------- --------------------------------------------------------------------------------
+CLOSED			       file		    /u01/app/oracle/admin/DB11G/encryption_keystore
+
+
+ALTER SYSTEM SET ENCRYPTION KEY AUTHENTICATED BY "myPassword";
+
+host ls $ORACLE_BASE/admin/$ORACLE_SID/encryption_keystore/
+ewallet.p12
+
+@show_tde10
+v$encryption_wallet
+STATUS			       WRL_TYPE 	    WRL_PARAMETER
+------------------------------ -------------------- --------------------------------------------------------------------------------
+OPEN			       file		    /u01/app/oracle/admin/DB11G/encryption_keystore
+
+shutdown immediate;
+startup;
+
+@show_tde10
+v$encryption_wallet
+STATUS			       WRL_TYPE 	    WRL_PARAMETER
+------------------------------ -------------------- --------------------------------------------------------------------------------
+CLOSED			       file		    /u01/app/oracle/admin/DB11G/encryption_keystore
+
+
+-- Wallets must be reopened after an instance restart and can be closed to prevent access to encrypted columns.
+
+ALTER SYSTEM SET ENCRYPTION WALLET OPEN AUTHENTICATED BY "myPassword";
+
+@show_tde10
+v$encryption_wallet
+STATUS			       WRL_TYPE 	    WRL_PARAMETER
+------------------------------ -------------------- --------------------------------------------------------------------------------
+OPEN			       file		    /u01/app/oracle/admin/DB11G/encryption_keystore
+
+
+CREATE TABLESPACE encrypted_ts DATAFILE '/u02/oradata/DB11G/encrypted_ts01.dbf' SIZE 1M AUTOEXTEND ON NEXT 1M
+ENCRYPTION USING 'AES256' DEFAULT STORAGE(ENCRYPT);
+
+CREATE USER test IDENTIFIED BY test DEFAULT TABLESPACE encrypted_ts temporary tablespace temp;
+ALTER USER test QUOTA UNLIMITED ON encrypted_ts;
+GRANT CONNECT TO test;
+GRANT CREATE TABLE TO test;
+
+
+-- Encrypted Column
+
+-- Create a test table with an encrypted column and insert some data. 
+-- Using the ENCRYPT clause on its own is the same as using the ENCRYPT USING 'AES192' clause, as AES192 is the default encryption method.
+
+conn test/test
+
+DROP TABLE tde_test;
+PURGE RECYCLEBIN;
+
+CREATE TABLE tde_test (
+  id    NUMBER(10),
+  data  VARCHAR2(50) ENCRYPT
+)
+TABLESPACE encrypted_ts;
+
+INSERT INTO tde_test (id, data) VALUES (1, 'This is a secret!');
+COMMIT;
+exit;
+
+sqlplus / as sysdba << END
+ALTER SYSTEM FLUSH BUFFER_CACHE;
+shutdown immediate;
+startup;
+END
+
+sqlplus / as sysdba
+
+SQL> SELECT * FROM test.tde_test;
+SELECT * FROM test.tde_test
+                   *
+ERROR at line 1:
+ORA-28365: wallet is not open
+
+conn / as sysdba
+
+ALTER SYSTEM SET ENCRYPTION WALLET OPEN IDENTIFIED BY "myPassword";
+
+SQL> SELECT * FROM test.tde_test;
+
+	ID DATA
+---------- --------------------------------------------------
+	 1 This is a secret!
+
+-- External Tables
+-- External tables can be encrypted in a similar way to regular tables. 
+-- First, we make sure the default data pump directory is available to the test user.
+
+sqlplus / as sysdba
+GRANT READ, WRITE ON DIRECTORY data_pump_dir TO test;
+
+-- Next, we create the external table as a copy of an existing table, using the ENCRYPT clause.
+
+CONN test/test
+
+CREATE TABLE tde_test_ext (
+  id,
+  data ENCRYPT IDENTIFIED BY "myPassword"
+)
+ORGANIZATION EXTERNAL
+(
+  TYPE ORACLE_DATAPUMP
+  DEFAULT DIRECTORY data_pump_dir
+  location ('tde_test_ext.dmp')
+)
+AS
+SELECT id,
+       data
+FROM   tde_test;
+
+
+-- Rekeying an encrypted table
+alter table test.tde_test rekey;
+
+
+-- Resetting the Master Key
+-- The wallet created FROM oracle commands cannot be opened with owm, reason - invalid password
+-- it sould be re-created with the orapki command bellow
+-- Use the Oracle Wallet Manager (owm) to change the password and convert the wallet into an autologin wallet.
+-- After enabling the auto login for the wallet with owm, the sso file is created
+ls -lrt /u01/app/oracle/admin/DB11G/encryption_keystore/
+-rw------- 1 oracle oinstall 1309 Feb  6 11:23 ewallet.p12
+-rw------- 1 oracle oinstall 1337 Feb  6 11:23 cwallet.sso
+
+-- Use also orapki to create an autologin for the key store.
+orapki wallet create -wallet /u01/app/oracle/admin/DB11G/encryption_keystore/ -pwd "myPassword" -auto_login
+ls -lrt /u01/app/oracle/admin/DB11G/encryption_keystore/
+-rw-r--r--. 1 oracle oinstall 1573 Feb  6 13:31 ewallet.p12
+-rw-------. 1 oracle oinstall 1651 Feb  6 13:43 cwallet.sso
+
+-- Display the wallet contents
+orapki wallet display -wallet /u01/app/oracle/admin/DB11G/encryption_keystore/ -pwd "myPassword"
+Requested Certificates: 
+Subject:        CN=oracle
+User Certificates:
+Oracle Secret Store entries: 
+ORACLE.SECURITY.DB.ENCRYPTION.ASJvia5ZbU8pvz0Ju5Ew6VEAAAAAAAAAAAAAAAAAAAAAAAAAAAAA
+ORACLE.SECURITY.DB.ENCRYPTION.MASTERKEY
+ORACLE.SECURITY.TS.ENCRYPTION.BTZh/WtVIuGvSGJFI3bP69sCAwAAAAAAAAAAAAAAAAAAAAAAAAAA
+Trusted Certificates: 
+
+
+-- Data Pump Export and Import with Encryption
+
+-- Exporting
+-- Even when TDE is setup if encryption parameters are not used in expdp, the resulting dump file will be unencrypted.
+expdp system/manager directory=DATA_PUMP_DIR dumpfile=test.dmp schemas=test
+
+strings /u01/app/oracle/admin/DB11G/dpdump/test.dmp | grep secret*
+This is a secret!
+
+-- To encrypt an export use encryption_mode and encryption paramters.
+expdp system/manager directory=DATA_PUMP_DIR dumpfile=test2.dmp schemas=test ENCRYPTION_MODE=TRANSPARENT ENCRYPTION=all
+-- The resulting dump file is encrypted.
+strings /u01/app/oracle/admin/DB11G/dpdump/test2.dmp | grep secret*
+
+sqlplus / as sysdba << END
+drop user test cascade;
+END
+
+-- Importing
+-- To import FROM an encrypted, simply run the import command as usual provided TDE is setup and wallet is open.
+impdp system/manager directory=DATA_PUMP_DIR dumpfile=test2.dmp schemas=test 
+
+-- RMAN Backup with Encryption
+-- There are multiple ways to enable encryption for backups. The easiest and simplest way is to configure default rman configuration to use encryption.
+rman target=/ << END
+CONFIGURE ENCRYPTION FOR DATABASE ON;
+CONFIGURE ENCRYPTION ALGORITHM 'AES256';
+END
+-- This will make every backup run an ecnrypted backup.
+RMAN> backup datafile 6 tag='default backup';
+
+TAG                              ENC
+-------------------------------- ---
+DEFAULT BACKUP                   YES
+This could be overriden with set encryption.
+RMAN> set encryption off;
+RMAN> backup datafile 6 tag='enc off';
+
+TAG                              ENC
+-------------------------------- ---
+ENC OFF                          NO
+-- If an tablespace is already encrypted and backup taken is an encrypted backup then the encrypted blocks are passed through to backup unchnaged. 
+-- Only the unencrypted blocks are encrypted during backup.
+
+
+-- display wallet
+orapki wallet display -wallet /u01/app/oracle/admin/DB11G/encryption_keystore/ -pwd "myPassword"
+-- if we do not specify the password, it ask for it, but when enterred it correctly, it does not work, error :PKI-02002: Unable to open the wallet. Check password.
+
+-- change password
+orapki wallet change_pwd -wallet /u01/app/oracle/admin/DB11G/encryption_keystore/ [-oldpwd password ] [-newpwd password]
+
+-- attention, the password must be 8 chars with numeric and special chars
+-- after changing the password with orapki and setting the autologin for the wallet it works with owm
+
+
+-- reference
+Add encrypted column to existing table:
+ALTER TABLE table_name ADD (column_name datatype ENCRYPT);
+
+Create table and encrypt column:
+CREATE TABLE <table_name> (column_name datatype ENCRYPT);
+
+Encrypt unencrypted existing column:
+ALTER TABLE table_name MODIFY (column_name ENCRYPT);
+
+Master key: set or reset: (use owm)
+ALTER SYSTEM SET ENCRYPTION KEY IDENTIFIED BY <password>;
+
+Master key: set or reset to use PKI certificate:
+ALTER SYSTEM SET ENCRYPTION KEY <certificate_ID> IDENTIFIED BY <password>;
+
+Wallet: open to access master keys:
+ALTER SYSTEM SET ENCRYPTION WALLET OPEN IDENTIFIED BY <password>;
+-- reference
+
+
+
+
+
+----------------------------------------------------------------------------------------------------------------------------------------------------------------
+How to Implement Oracle TDE in Single-Instance Oracle dSources and VDBs
+This article provides the process for putting TDE in place in an Oracle dSource and how this implementation flows through to VDBs created FROM this same source. 
+It will examine the use of environment variables to locate wallets specific to each VDB WHERE wallets are to be unique to each VDB. 
+Included will be some common errors and troubleshooting that can be used to diagnose wallet access issues associated with TDE configurations.
+
+After completing the tasks, you will have the following:
+
+A process for implementing TDE in the dSource including building the Oracle wallet and configuring the dSource to utilise this same wallet
+A process for checking that TDE is functioning normally in the dSource and that data can be encrypted/decrypted
+A process for implementing TDE in the destination VDB utilising the wallet established in the dSource
+Troubleshooting techniques to aid in determining why the wallet and therefor TDE is not functioning correctly in the VDB
+To implement Oracle TDE in single-instance Oracle dSources and VDBs
+In this configuration the Oracle parameter db_unique_name and its value will be used to match up the VDB with its associated wallet location.
+
+The wallet FROM the source will be copied FROM the dSource to the appropriate location at the VDB target host prior to provisioning the VDB. 
+To this end the value required for the VDB's name and db_unique_name value will need to be determined prior to attempting to create the VDB.
+
+Establishing the Oracle Wallet in the dSource
+In order for the Transparent Data Encryption to function it requires a wallet be built which will hold the encryption key information used 
+to perform the encryption and decryption of data.
+
+As the location of wallet is going to be linked with the databases unique name the value for this needs to be confirmed.
+
+The following will need to be performed as the owner of the Oracle home.
+
+Determine the db_unique_name value for the database.
+Log in to the database via sqlplus and execute the show parameter command below
+
+sqlplus / as sysdba
+SQL> show parameter unique
+NAME                                 TYPE          VALUE
+------------------------------------ -----------   ------------------------------
+db_unique_name                       string        rh7si11g
+Set an environment variable using the db_unique_name value.
+Export an operating system environment variable called ORACLE_UNQNAME and set it to this value
+
+$ export ORACLE_UNQNAME=rh7si11g
+Set up the wallet location in sqlnet.ora.
+Set the wallet location in the SQLNET.ORA used by the database by placing an entry for the SQLNET directive ENCRYPTION_WALLET_LOCATION into the file. 
+This file us typically located in ORACLE_HOME/network/admin/sqlnet.ora but may be located using the environment variable TNS_ADMIN if it is located 
+in a non-default location. Oracle databases started using this ORACLE_HOME's binaries will examine the sqlnet.ora file during startup 
+and use the value associated with ENCRYPTION_WALLET_LOCATION to locate the wallet and open it for TDE use.
+
+$ vi $ORACLE_HOME/network/admin/sqlnet.ora
+
+NAMES.DIRECTORY_PATH= (TNSNAMES, EZCONNECT)
+SQLNET.AUTHENTICATION_SERVICES= (BEQ, TCP)
+
+ENCRYPTION_WALLET_LOCATION=
+  (SOURCE=(METHOD=FILE)(METHOD_DATA=
+    (DIRECTORY=/u01/app/ora11204/admin/$ORACLE_UNQNAME/wallet/)))
+Create a directory to hold the Oracle wallet.
+Create a directory for the wallet using the same value in the DIRECTORY directive FROM the sqlnet.ora.
+
+$ mkdir -p /u01/app/ora11204/admin/$ORACLE_UNQNAME/wallet
+Create the Oracle wallet.
+
+$ orapki wallet create -wallet /u01/app/ora11204/admin/$ORACLE_UNQNAME/wallet/ -pwd delphix123 -auto_login
+Oracle PKI Tool : Version 11.2.0.4.0 - Production
+Copyright (c) 2004, 2013, Oracle and/or its affiliates. All rights reserved.
+The wallet should now be present as the following files:
+
+[ora11204@rh73-ora-src ~]$ ls -l /u01/app/ora11204/admin/$ORACLE_UNQNAME/wallet/
+
+-rw-------. 1 ora11204 oinstall 3589 Jun 13 18:06 cwallet.sso
+-rw-------. 1 ora11204 oinstall 3512 Jun 13 18:06 ewallet.p12
+Identifying the new wallet is in use.
+A restart of the dSource database may be required for it to pick up and start using the new wallet. 
+To determine that wallet has been successfully opened by the database start sqlplus and query v$encryption_wallet :
+
+SQL> set lines 132
+SQL> col wrl_parameter format a50
+SQL> SELECT * FROM v$encryption_wallet;
+
+WRL_TYPE         WRL_PARAMETER                                              STATUS
+---------- -------------------------------------------------- ------------------
+file             /u01/app/ora11204/admin/$ORACLE_UNQNAME/wallet/    OPEN_NO_MASTER_KEY
+Set the wallet master key
+
+Initially the wallet will be open but no master key is set. To set the master key issue the following.
+
+SQL> ALTER SYSTEM SET ENCRYPTION KEY IDENTIFIED BY "delphix123";
+
+System altered.
+Testing the TDE configuration in the dSource
+Create a tablespace WHERE everything stored in that tablespace is encrypted as the oracle SYS user.
+SQL> connect / as sysdba
+Connected.
+SQL> create tablespace obfuscated_tbs datafile size 100M encryption using 'AES128' default storage (encrypt);
+Establish a user to create and own the encrypted table as the SYS user.
+SQL> alter user scott identified by tiger account unlock;
+User altered.
+
+SQL> alter user scott quota unlimited on obfuscated_tbs;
+User altered.
+Connect as the scott user and create a table placing it in the encrypted tablespace.
+SQL> connect scott/tiger
+Connected.
+
+SQL> create table obsfucat (key1 number, name varchar2(30)) tablespace obfuscated_tbs;
+Table created.
+Insert some data into the encrypted table
+SQL> insert into obsfucat values (1111,'Paul');
+SQL> commit;
+Select FROM the new table
+SQL> SELECT * FROM scott.obsfucat;
+
+      KEY1 NAME
+---------- ------------------------------
+      1111 Paul
+Preparing TDE in the VDB Target Home
+Configure /etc/oratab with an entry for the Oracle Home the VDB is to be provisioned against:
+
+Add an entry for the home to be provisioned to in oratab to make life a little easier when it comes to setting up environments. 
+Set the ORACLE_HOME to the VDB's home using this new oratab entry. Note do not use the VDB's name for the entry as it may prevent 
+the VDB's name FROM being re-used during the provision process.
+[ora11204@rh73-ora-tgt ~]$ vi /etc/oratab
+[ora11204@rh73-ora-tgt ~]$ . oraenv
+ORACLE_SID = [ora11204] ? o11204
+
+The Oracle base has been set to /u01/app/ora11204
+Add the entry to sqlnet.ora required to point the VDB's using this home to appropriate wallet locations.
+$ cd $ORACLE_HOME/network/admin
+$ vi sqlnet.ora
+NAMES.DIRECTORY_PATH= (TNSNAMES, EZCONNECT)
+SQLNET.AUTHENTICATION_SERVICES= (BEQ, TCP)
+
+ENCRYPTION_WALLET_LOCATION=
+  (SOURCE=(METHOD=FILE)(METHOD_DATA=
+    (DIRECTORY=/u01/app/ora11204/admin/$ORACLE_UNQNAME/wallet/)))
+Export/set the environment variable ORACLE_UNQNAME to match the name of the proposed VDB, in this case a VDB called vdb1.
+$ export ORACLE_UNQNAME=vdb1
+Create a wallet directory based on this environment variable ORACLE_UNQNAME
+$ mkdir -p /u01/app/ora11204/admin/$ORACLE_UNQNAME/wallet/
+$ ls -lart /u01/app/ora11204/admin/
+total 0
+drwxrwxr-x. 6 ora11204 oinstall 65 Jun 15 22:52 ..
+drwxr-xr-x. 3 ora11204 oinstall 20 Jun 15 22:52 vdb1
+drwxr-xr-x. 3 ora11204 oinstall 18 Jun 15 22:52 .
+Copy the wallet FROM the source environment and place it in the wallet location for the VDB. In this scp is being used.
+$ scp ora11204@plb11204.dc1:/u01/app/ora11204/admin/rh7si11g/wallet/* /u01/app/ora11204/admin/$ORACLE_UNQNAME/wallet/
+The authenticity of host 'plb11204.dc1 (10.43.42.240)' can't be established.
+ECDSA key fingerprint is d6:81:c0:ad:44:13:a3:56:f7:5d:d6:b2:22:00:c1:30.
+Are you sure you want to continue connecting (yes/no)? yes
+Warning: Permanently added 'plb11204.dc1,10.43.42.240' (ECDSA) to the list of known hosts.
+ora11204@plb11204.dc1's password:
+cwallet.sso                                  100% 4298     4.2KB/s   00:00    
+ewallet.p12                                  100% 4221     4.1KB/s   00:00    
+
+$ ls -l /u01/app/ora11204/admin/$ORACLE_UNQNAME/wallet/
+
+-rw-------. 1 ora11204 oinstall 4298 Jun 15 22:54 cwallet.sso
+-rw-------. 1 ora11204 oinstall 4221 Jun 15 22:54 ewallet.p12
+Provision the VDB using a unique name of vdb1
+----------------------------------------------------------------------------------------------------------------------------------------------------------------
