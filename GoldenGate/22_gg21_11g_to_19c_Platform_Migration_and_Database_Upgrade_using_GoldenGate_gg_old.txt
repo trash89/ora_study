@@ -324,7 +324,6 @@ add rmttrail /home/oracle/udepl1/var/lib/data/rt, extract dpump
 edit params dpump
 
 extract dpump
-userid ggs_owner password ggs_owner
 rmthost gg21, port 5004
 rmttrail /home/oracle/udepl1/var/lib/data/rt
 passthru
