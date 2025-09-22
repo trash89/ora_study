@@ -479,6 +479,10 @@ lag replicat rep1
 stats extract ext1, total, reportrate min
 stats replicat rep1, total, reportrate min
 
+send extract ext1 logend
+send replicat rep1 logend
+
+
 -- we should check the count of some tables to see if it is at a minimum of difference
 -- once the lag is small and the counts are close, we should prepare for the application switch
 -- disconnect the application on the source and waits for the replication to catch up
