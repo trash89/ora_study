@@ -1,3 +1,5 @@
+-- only for oracle 10g, 11g
+
 sqlplus / as sysdba
 $ORACLE_HOME/rdbms/admin/csminst.sql
 exit
