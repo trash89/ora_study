@@ -151,14 +151,9 @@ Remote Capture – OGG-00446 Could Not Find Archived Log
 Install Oracle Client 11.2.0.4 and use the parameter TRANLOGOPTIONS DBLOGREADER in the Extract process parameter file. Restart the Extract process.
 
 
--- not necesary if integrated extract and integrated replicat are used
-cd /u01/app/oracle/product/gg23/lib/sql/legacy
+-- to support replication of sequences
+cd /u01/app/oracle/product/gg21/lib/sql/legacy
 sqlplus / as sysdba
-
-@role_setup
-Enter GoldenGate schema name:GGS_OWNER
-
-grant ggs_ggsuser_role to ggs_owner;
 
 @sequence 
 Please enter the name of a schema for the GoldenGate database objects:
@@ -201,14 +196,9 @@ exec dbms_streams_auth.grant_admin_privilege('GGS_OWNER');
 END
 
 
--- not necesary if integrated extract and integrated replicat are used
-cd /u01/app/oracle/product/gg23/lib/sql/legacy
+-- to support replication of sequences
+cd /u01/app/oracle/product/gg21/lib/sql/legacy
 sqlplus / as sysdba
-
-@role_setup
-Enter GoldenGate schema name:GGS_OWNER
-
-grant ggs_ggsuser_role to ggs_owner;
 
 @sequence 
 Please enter the name of a schema for the GoldenGate database objects:

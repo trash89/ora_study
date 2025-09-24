@@ -114,6 +114,35 @@ GRANT DBA                                       TO ggs_owner;
 grant become user                               to GGS_OWNER;
 END
 
+-- configure DDL Synchronization
+cd $OGG_HOME
+-- if no dedicated tablespace is setup for the user GGS_OWNER, export the variable (if his default tablespace is USERS, by example)
+export ALLOW_SHARED_TABLESPACE=TRUE
+sqlplus / as sysdba
+@marker_setup
+Enter Oracle GoldenGate schema name:GGS_OWNER
+
+alter session set recyclebin=OFF;
+
+@ddl_setup
+Enter Oracle GoldenGate schema name:GGS_OWNER
+
+@role_setup
+Enter GoldenGate schema name:GGS_OWNER
+
+grant ggs_ggsuser_role to ggs_owner;
+
+@ddl_enable
+
+@ddl_pin GGS_OWNER
+
+@sequence 
+Please enter the name of a schema for the GoldenGate database objects:
+ggs_owner
+Setting schema name to GGS_OWNER
+
+exit
+
 
 ---------------prepare the target database ---------------------------
 
@@ -146,6 +175,17 @@ grant flashback any table   to GGS_OWNER;
 exec dbms_goldengate_auth.grant_admin_privilege('GGS_OWNER');
 exec dbms_streams_auth.grant_admin_privilege('GGS_OWNER');
 END
+
+-- to support replication of sequences
+cd /u01/app/oracle/product/gg21/lib/sql/legacy
+sqlplus / as sysdba
+
+@sequence 
+Please enter the name of a schema for the GoldenGate database objects:
+GGS_OWNER
+Setting schema name to GGS_OWNER
+
+ALTER TABLE sys.seq$ ADD SUPPLEMENTAL LOG DATA (PRIMARY KEY) COLUMNS;
 
 
 ---------- prepare the goldengate servers ---------------------

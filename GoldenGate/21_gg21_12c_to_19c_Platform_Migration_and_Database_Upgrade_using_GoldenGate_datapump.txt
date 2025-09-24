@@ -78,6 +78,17 @@ exec dbms_goldengate_auth.grant_admin_privilege('GGS_OWNER');
 exec dbms_streams_auth.grant_admin_privilege('GGS_OWNER');
 END
 
+-- to support replication of sequences
+cd /u01/app/oracle/product/gg21/lib/sql/legacy
+sqlplus / as sysdba
+
+@sequence 
+Please enter the name of a schema for the GoldenGate database objects:
+GGS_OWNER
+Setting schema name to GGS_OWNER
+
+ALTER TABLE sys.seq$ ADD SUPPLEMENTAL LOG DATA (PRIMARY KEY) COLUMNS;
+
 
 
 ---------------prepare the target database ---------------------------
@@ -115,6 +126,16 @@ exec dbms_goldengate_auth.grant_admin_privilege('GGS_OWNER');
 exec dbms_streams_auth.grant_admin_privilege('GGS_OWNER');
 END
 
+-- to support replication of sequences
+cd /u01/app/oracle/product/gg21/lib/sql/legacy
+sqlplus / as sysdba
+
+@sequence 
+Please enter the name of a schema for the GoldenGate database objects:
+GGS_OWNER
+Setting schema name to GGS_OWNER
+
+ALTER TABLE sys.seq$ ADD SUPPLEMENTAL LOG DATA (PRIMARY KEY) COLUMNS;
 
 ---------- prepare the goldengate server ---------------------
 
