@@ -1,0 +1,914 @@
+source : s03758b0:WALIS1P:WALIS1P_s03758b0:SYS - clone dans WALIS2P@s05606w0(new source)+generate activity - clone2 intermediary server WALIS2P@s05170e0 -> 19c WALIS2P@s15421u0
+
+
+-- we start to clone the real source database WALIS1P@s03758b0 to WALIS2P@s05606w0, which will become our source database for this POC
+sudo su - oracle
+scr
+./Clone_db_online_12 srvsrc=s03758b0 srvtrg=s05606w0 sidsrc=WALIS1P sidtrg=WALIS2P
+
+
+
+
+--
+-- for the POC
+-- POC source database(WALIS2P@s05606w0 ) --> clone2 to intermediary server(WALIS2P@s05170e0) ---> normalisation of the clone2->export and import into the target database --> goldengate server (s17650b0) with extract on the clone1 and replicat on target db--> target database 19c WALIS2P@s15421u0
+--
+-- This is a change synchronization technique, with the target database instantiation using datapump(expdp/impdp) method
+-- this procedure is used for big databases with high transactional activity and low interruption of service
+-- use of parallel integrated extract and parallel integrated replicat for quick catch up of delta transactions (source database >11g and GG >12.2)
+--
+
+-- for the POC
+
+- 1. Clone the Original Source Database to another server- it will become our Source Database
+- 2. Prepare the source database for GoldenGate
+- 3. Configure the extract process
+- 4. Obtain an instantiation SCN - this is the SCN of the extract
+- 5. Start the extract process with the obtained SCN
+- 6. Generate activity (DDL and DML) on the source database
+- 7. Switch to the Migration with impdp/expdb procedure : clone the source database until the obtained SCN (typeclone=RMAN scn=114383503)
+- 8. Prepare the target DB for import (impdp)
+- 9. Import the global objects and the schemas
+- 10. Create and start the replicat process
+- 11. Create and start the distpath process
+- 12. Check and tests
+- 13. If success, stop the applications on the source, wait until all tx are replicated and reconnect to the target DB
+- 14. Stop and delete the goldengate objects, cleanup
+- 15. Enjoy and appreciate!
+
+
+
+---------- prepare the source database ---------------------------
+
+-- on the source server (s05606w0, base WALIS2P)
+
+echo ${ORACLE_HOME}
+echo ${ORACLE_SID}
+echo ${TNS_ADMIN}
+
+-- check the constraints not valudated, especially PK and UK and validate it 
+SELECT constraint_name,constraint_type,table_name,status,validated,invalid
+FROM dba_constraints
+WHERE
+   owner LIKE upper('%&&own%')
+   and (status != 'ENABLED' or validated !='VALIDATED')
+ORDER BY owner,table_name,constraint_name
+;
+
+-- validate the PK and UK constraints if they are not validated/enabled
+
+alter table <schema>.<table_name> enable validate constraint <constraint_name>;
+
+
+-- check the logging of tables and indexes and put them in logging mode
+SELECT 'alter table "'||owner||'"."'||table_name||'" logging;' 
+FROM dba_tables 
+WHERE owner LIKE upper('%&&own%') and logging='NO'
+union all
+SELECT 'alter index "'||owner||'"."'||index_name||'" logging;' 
+FROM dba_indexes
+WHERE owner LIKE upper('%&&own%') and logging='NO'
+;
+
+-- put the tables and the indexes in logging mode
+alter table <schema>.<table_name> logging;
+alter index <schema>.<index_name> logging;
+
+
+-- configure the init.ora parameters for GoldenGate
+
+sqlplus / as sysdba  <<END
+startup;
+alter system set enable_goldengate_replication=true scope=both;
+alter system set streams_pool_size=200M scope=both;
+alter database force logging;
+alter database add supplemental log data (primary key,unique,foreign key,all) columns;
+alter system set undo_management=auto scope=spfile;
+alter system set undo_retention = 86400; 
+alter system switch logfile;
+create pfile from spfile;
+END
+
+
+-- create the gg_data tablespace and the ggs_owner user
+scr
+./manage_schema.pl sid=$ORACLE_SID schema=GGS_OWNER remove=Y
+./manage_schema.pl SCHEMA=GGS_OWNER DATA01=1 temp=1 maxsize=32000 PWDLEN=20 AFFPWD=ON
+Creation du schema GGS_OWNER :   a8n66449.                                                                                                                                                                                                                                                                                        
+
+
+sqlplus / as sysdba << END
+grant connect,resource,dba  to GGS_OWNER;
+grant create session        to GGS_OWNER;
+grant flashback any table   to GGS_OWNER;
+exec dbms_goldengate_auth.grant_admin_privilege('GGS_OWNER');
+exec dbms_streams_auth.grant_admin_privilege('GGS_OWNER');
+END
+
+-- create the user mysystem on the source database in order to perform administrative tasks, this user will not be imported on the target
+sqlplus / as sysdba <<END
+create user mysystem identified by "SafranAircraft1!";
+grant connect,resource,dba to mysystem;
+grant sysdba to mysystem;
+END
+
+
+-- once the GGS_OWNER is created, we need to run the sequence.sql script in order to activate the replication of sequences in GoldenGate
+
+-- on the goldengate server (s17650b0)
+
+
+---------- prepare the goldengate server for extract ---------------------
+
+-- on the goldengate server (s17650b0)
+
+-- run the sequence script
+-- Support for Oracle Sequences
+-- From the SQL prompt, run the script $OGG_HOME/lib/sql/legacy/sequence.sql on the source and target database as a DBA.
+-- if you get this error, you can temporarily add SQLNET.ALLOW_WEAK_CRYPTO_CLIENTS=TRUE in $TNS_ADMIN/sqlnet.ora on the database server and reload the listener: lsnrctl reload LISTENER
+-- ERROR: ORA-12643: Client received internal error from server
+
+cd $OGG_HOME/lib/sql/legacy
+sqlplus mysystem/"SafranAircraft1!"@s05606w0.snm.snecma:1521/WALIS2P as sysdba
+@sequence
+Please enter the name of a schema for the GoldenGate database objects:
+GGS_OWNER
+
+-- STATUS OF SEQUENCE SUPPORT
+--------------------------------------------------------------
+-- SUCCESSFUL installation of Oracle Sequence Replication support
+
+
+adminclient
+connect https://s17650b0:443 as oggadmin !
+
+info credentialstore domain OracleGoldenGate
+info credentialstore domain Network
+
+
+-- create an alias to the source database : naming convention: al_src_<source_server_name>_<source_DB_name>
+alter credentialstore delete user al_src_s05606w0_WALIS2P domain DEV
+alter credentialstore add user ggs_owner@(DESCRIPTION=(ADDRESS=(PROTOCOL=TCP)(HOST=s05606w0.snm.snecma)(PORT=1521))(CONNECT_DATA=(SERVER=DEDICATED)(SERVICE_NAME=WALIS2P))) password "a8n66449" alias al_src_s05606w0_WALIS2P domain DEV
+
+
+info credentialstore domain DEV
+
+-- create the checkpoint table and heartbeattable in the source database
+-- normally is not necessary, but in the case we want to reverse the extract and replicat to keep in sync the old source db with the new target
+
+dblogin useridalias al_src_s05606w0_WALIS2P domain DEV
+add checkpointtable ggs_owner.chkptab
+add heartbeattable
+
+info checkpointtable ggs_owner.*
+info heartbeattable
+
+
+-- set the goldengate globals
+
+edit globals
+-----------------------------
+ggschema ggs_owner
+checkpointtable ggs_owner.chkptab
+-----------------------------
+
+view globals
+
+
+
+------------------ prepare the source database for instantiation ---------------------------------------
+
+-- on the goldengate server (s17650b0)
+
+-- add schematrandata to prepare the tables (will add columns to data dictionary to keep the instantiation scn)
+
+-- connect to the source database with gg
+dblogin useridalias al_src_s05606w0_WALIS2P domain DEV
+
+add schematrandata WALICE allcols preparecsn nowait
+add schematrandata WALICE_LECT allcols preparecsn nowait
+add schematrandata SOE allcols preparecsn nowait
+
+info schematrandata WALICE
+info schematrandata WALICE_LECT
+info schematrandata SOE
+
+-- use add trandata for source database versions versions < Oracle 12.2
+add trandata WALICE.* allcols preparecsn nowait
+add trandata WALICE_LECT.* allcols preparecsn nowait
+add trandata SOE.* allcols preparecsn nowait
+
+
+info trandata WALICE.*
+info trandata WALICE_LECT.*
+info trandata SOE.*
+
+exit
+
+-- on the goldengate server (s17650b0)
+
+-- in order to generate the activity on the source database, we create the SOE schema
+-- we use swingbench, installed in /home/oracle/swingbench on the GG21 s17650b0 server
+cd /home/oracle/swingbench/bin
+./oewizard -cl -create -dt thin -nc -cs s05606w0.snm.snecma:1521/WALIS2P -u soe -p soe -scale 1 -tc 2 -dba "mysystem as sysdba" -dbap "SafranAircraft1!" -ts SOE_DATA -normalfile -df "/ora_data_tbl/walis2p/soe_data01.dbf"
+
+SwingBench Wizard
+Author  :       Dominic Giles
+Version :       2.7.0.1543
+
+Running in Lights Out Mode using config file : ../wizardconfigs/oewizard.xml
+
+Data Generation Runtime Metrics
++-------------------------+-------------+
+| Description             | Value       |
++-------------------------+-------------+
+| Connection Time         | 0:00:00.002 |
+| Data Generation Time    | 0:04:59.866 |
+| DDL Creation Time       | 0:01:09.799 |
+| Total Run Time          | 0:06:09.670 |
+| Rows Inserted per sec   | 52,906      |
+| Actual Rows Generated   | 15,827,404  |
+| Commits Completed       | 859         |
+| Batch Updates Completed | 79,205      |
++-------------------------+-------------+
+
+Validation Report
+The schema appears to have been created successfully.
+
+Valid Objects
+Valid Tables : 'ORDERS','ORDER_ITEMS','CUSTOMERS','WAREHOUSES','ORDERENTRY_METADATA','INVENTORIES','PRODUCT_INFORMATION','PRODUCT_DESCRIPTIONS','ADDRESSES','CARD_DETAILS'
+Valid Indexes : 'PRD_DESC_PK','PROD_NAME_IX','PRODUCT_INFORMATION_PK','PROD_SUPPLIER_IX','PROD_CATEGORY_IX','INVENTORY_PK','INV_PRODUCT_IX','INV_WAREHOUSE_IX','ORDER_PK','ORD_SALES_REP_IX','ORD_CUSTOMER_IX','ORD_ORDER_DATE_IX','ORD_WAREHOUSE_IX','ORDER_ITEMS_PK','ITEM_ORDER_IX','ITEM_PRODUCT_IX','WAREHOUSES_PK','WHS_LOCATION_IX','CUSTOMERS_PK','CUST_EMAIL_IX','CUST_ACCOUNT_MANAGER_IX','CUST_FUNC_LOWER_NAME_IX','ADDRESS_PK','ADDRESS_CUST_IX','CARD_DETAILS_PK','CARDDETAILS_CUST_IX'
+Valid Views : 'PRODUCTS','PRODUCT_PRICES'
+Valid Sequences : 'CUSTOMER_SEQ','ORDERS_SEQ','ADDRESS_SEQ','LOGON_SEQ','CARD_DETAILS_SEQ'
+Valid Code : 'ORDERENTRY'
+Schema Created
+
+
+
+-- after the creation of the SOE user, we need to enable his PK/UK constraints and put the tables/indexes in logging mode
+
+-- validate the PK constraints
+sqlplus mysystem/"SafranAircraft1!"@s05606w0.snm.snecma:1521/WALIS2P as sysdba <<END
+
+alter table soe.ADDRESSES enable validate constraint ADDRESS_PK;
+alter table soe.CARD_DETAILS enable validate constraint CARD_DETAILS_PK;
+alter table soe.CUSTOMERS enable validate constraint CUSTOMERS_PK;
+alter table soe.INVENTORIES enable validate constraint INVENTORY_PK;
+alter table soe.ORDERS enable validate constraint ORDER_PK;
+alter table soe.ORDER_ITEMS enable validate constraint ORDER_ITEMS_PK;
+alter table soe.PRODUCT_DESCRIPTIONS enable validate constraint PRODUCT_DESCRIPTIONS_PK;
+alter table soe.WAREHOUSES enable validate constraint WAREHOUSES_PK;
+
+alter index "SOE"."ADDRESS_PK" logging;
+alter index "SOE"."CUSTOMERS_PK" logging;
+alter index "SOE"."CARD_DETAILS_PK" logging;
+alter index "SOE"."WAREHOUSES_PK" logging;
+alter index "SOE"."ORDER_ITEMS_PK" logging;
+alter index "SOE"."ORDER_PK" logging;
+alter index "SOE"."PRD_DESC_PK" logging;
+alter index "SOE"."WHS_LOCATION_IX" logging;
+alter index "SOE"."INV_PRODUCT_IX" logging;
+alter index "SOE"."INV_WAREHOUSE_IX" logging;
+alter index "SOE"."ADDRESS_CUST_IX" logging;
+alter index "SOE"."ITEM_ORDER_IX" logging;
+alter index "SOE"."ITEM_PRODUCT_IX" logging;
+alter index "SOE"."ORD_SALES_REP_IX" logging;
+alter index "SOE"."ORD_CUSTOMER_IX" logging;
+alter index "SOE"."ORD_ORDER_DATE_IX" logging;
+alter index "SOE"."ORD_WAREHOUSE_IX" logging;
+alter index "SOE"."CUST_ACCOUNT_MANAGER_IX" logging;
+alter index "SOE"."CUST_DOB_IX" logging;
+alter index "SOE"."CUST_EMAIL_IX" logging;
+alter index "SOE"."PROD_NAME_IX" logging;
+alter index "SOE"."PROD_SUPPLIER_IX" logging;
+alter index "SOE"."PROD_CATEGORY_IX" logging;
+alter index "SOE"."CUST_FUNC_LOWER_NAME_IX" logging;
+alter index "SOE"."CARDDETAILS_CUST_IX" logging;
+
+END
+
+
+
+----------------------------- Create the extract process -------------------------------
+
+-- on the goldengate server (s17650b0)
+
+-- connect to the source database with gg
+dblogin useridalias al_src_s05606w0_WALIS2P domain DEV
+
+-- add the extract process (8 char for the extract_name) : naming convention: ext1 (if exits, ext2, ext3, etc) on 8 chars, exttrail naming convention : <source_server_name>_<source_DB_name>/lt
+add extract ext1 integrated tranlog, begin now
+
+-- Create the parameter file for the extract process
+edit params ext1
+
+------------------------------------------------------------------
+extract ext1
+useridalias al_src_s05606w0_WALIS2P domain DEV
+exttrail s05606w0_WALIS2P/lt
+discardrollover at 01:00 on sunday
+warnlongtrans 5min checkinterval 30min
+statoptions reportfetch
+reportcount every 5 minutes, rate
+logallsupcols
+updaterecordformat compact
+tranlogoptions integratedparams (max_sga_size 100,parallelism 2)
+ddl include mapped
+ddloptions report
+gettruncates
+table WALICE.*;
+sequence WALICE.*;
+table WALICE_LECT.*;
+sequence WALICE_LECT.*;
+table SOE.*;
+sequence SOE.*;
+
+------------------------------------------------------------------
+
+
+-- register the extract within the source database
+register extract ext1 database
+
+
+-- add the exttrail for the extract : naming convention : <source_server_name>_<source_DB_name>/lt
+add exttrail s05606w0_WALIS2P/lt, extract ext1 megabytes 500
+
+
+-- on the source server (s06894w0, database WALIS2P)
+
+-- prepare the source database for cloning
+
+-- determine the SCN of the clone: run this query on the source database and note the scn. The clone must be done at this scn and the extract will start at this scn too
+
+sqlplus / as sysdba << END
+alter system switch logfile;
+select min(scn) as instantiation_scn
+  from (select min(start_scn) as scn
+        from gv\$transaction 
+        union all 
+        select current_scn from gv\$database
+      );
+alter system switch logfile;
+END
+
+INSTANTIATION_SCN
+-----------------
+        434916554
+
+
+-- on the goldengate server (s17650b0)
+
+-- start the extract process and check if it runs correctly
+
+dblogin useridalias al_src_s05606w0_WALIS2P domain DEV
+
+start extract ext1 aftercsn 434916554
+info extract ext1 detail
+view report ext1
+
+
+
+-- generate activity on the database 
+
+-- on the source server (s05606w0, database WALIS2P)
+
+-- create the toto table into a replicated schema, it should be replicated on the target database
+s05606w0:WALIS2P:WALIS2P_s06894w0:SYS
+
+sqlplus / as sysdba << END
+create table WALICE.toto(id number);
+insert into WALICE.toto values (100);
+commit;
+END
+
+
+
+-- generate the activity for the POC, on the SOE user, will generate transactions for 10 clients for 5 minutes
+
+-- on the goldengate server (s17650b0)
+
+cd /home/oracle/swingbench/bin
+./charbench -c ../configs/SOE_Server_Side_V2.xml -u soe -p soe -uc 10 -cs s05606w0.snm.snecma:1521/WALIS2P -min 0 -max 5 -intermin 0 -intermax 0 -v users,tps
+
+---------------------------------------------------------------------------------------------------------------------------------------
+
+-- creating the clone for normalization : make sure to change the scn with the one obtained before starting the extract
+
+
+-- on the source server (s05606w0, database WALIS2P)
+
+-- establish the ssh equivalence between the source and the target servers
+
+-- check the source server listener.ora and tnsnames.ora to make sure the db is accessible @ORACLE_SID
+
+scr
+./RMAN_bckp $ORACLE_SID ARCHIVELOG
+
+
+scr
+./Clone_db_online_12_cat srvsrc=s05606w0 srvtrg=s05170e0 sidsrc=WALIS2P sidtrg=WALIS2P typeclone=RMAN scn=434916554
+
+
+-- After the cloning of the source database, we create a second toto2 table
+s05606w0:WALIS2P:WALIS2P_s06894w0:SYS
+
+sqlplus / as sysdba << END
+create table WALICE.toto2(id number);
+insert into WALICE.toto2 values(100);
+commit;
+END
+
+
+-- at this point, we should have the extract running and capturing the transactions
+
+-- we will continue with the procedure for database normalization
+
+
+-- on the clone server (s05170e0, database WALIS2P)
+
+sudo su – oracle
+envora
+(selectionner la base de donnees clonee)
+cd /AXIS/Mig19c/AFR
+./Migration19cCollecte.sh
+
+
+
+Date=`date '+%Y%m%d'`
+mkdir /AXIS/Mig19c/WALIS2P_${Date}
+cp -p /ora_arch_log/$msid/scriptMig_WALIS2P_${Date}.tar /AXIS/Mig19c/WALIS2P_${Date}
+cp -p /ora_backup/$msid/expdp_full_WALIS2P_${Date}.* /AXIS/Mig19c/WALIS2P_${Date}
+
+
+-- on the target server (s15421u0, database WALIS2P)
+
+# Si la base de donnees n’existe pas sur le serveur cible 
+sudo su – oracle
+fileGenScrDatabase=/AXIS/ADMINDB/stdproc/script/package/DatabaseCreate/Generation_Script_Database.conf
+codapp=`cat $fileGenScrDatabase | awk 'BEGIN { FS="=" } ($1=="CodeApplication") { print tolower($2) }'` 
+typenv=`cat $fileGenScrDatabase | awk 'BEGIN { FS="=" } ($1=="Environnement") { print tolower($2) }'`
+indenv=`cat $fileGenScrDatabase | awk 'BEGIN { FS="=" } ($1=="Numerique") { print $2 }'`
+
+# Si la base de donnees est presente sur le serveur cible :
+sudo su – oracle
+envora
+# (sélectionner la base de données clonée)
+codapp=`echo $msid |awk '{print substr($0,1,length($0)-3)}'` 
+typenv=`echo $msid |awk '{print substr($0,length($0),1)}'`
+indenv=`echo $msid |awk '{print substr($0,length($0)-1,1)}'`
+
+
+# Dans tous les cas, poursuivre avec la creation du repertoire de travail et la recuperation du tar :
+Date=`date '+%Y%m%d'`
+lScriptUtil=/util/admindb/$codapp/$typenv$indenv
+lScriptsMig=$lScriptUtil/Mig 
+RepMig=/AXIS/Mig19c/WALIS2P_${Date}
+mkdir -p $lScriptsMig
+cd $lScriptsMig
+tar -xvf $RepMig/scriptMig_WALIS2P_${Date}.tar
+
+
+# Si la base de donnees n’existe pas sur le serveur cible, il faut alors la creer :
+scr
+./Generation_Script_Database.ksh 
+$lScriptUtil/script/000_cre_db.ksh
+# (duree d’environ 20 minutes)
+envora
+# (selectionner la base de donnees juste creee)
+lsnrctl reload LISTENER
+/AXIS/ADMINDB/stdproc/script/check_db sid=WALIS2P action=SET restart=Y
+
+
+
+
+cd $lScriptsMig
+vi 11_CreateSchema.sh
+
+------------------------------------------------------------------------------------------------------------------------------------------------------------
+#!/bin/ksh
+# Informations pour Ajustements Nombre et Taille des Datafiles 2000 - 4000 - 8000 - 16000 - 20000 - 24000 - 32000
+#                      DATA                          1    2355
+# WALICE               DATA01                        1   15500
+# WALICE               INDEX01                       1     100
+# WALICE               LOB01                         2   20800
+# Instructions de suppression et creation
+/AXIS/ADMINDB/stdproc/script/manage_schema.pl sid=$ORACLE_SID schema=WALICE remove=Y
+/AXIS/ADMINDB/stdproc/script/manage_schema.pl sid=$ORACLE_SID schema=WALICE DATA01=1 INDEX01=1 LOB01=2 temp=1 maxsize=32000 PWDLEN=20 AFFPWD=ON
+/AXIS/ADMINDB/stdproc/script/manage_schema.pl sid=$ORACLE_SID schema=SOE remove=Y
+/AXIS/ADMINDB/stdproc/script/manage_schema.pl sid=$ORACLE_SID schema=SOE DATA01=1 temp=1 maxsize=32000 PWDLEN=20 AFFPWD=ON
+------------------------------------------------------------------------------------------------------------------------------------------------------------
+
+
+chmod u+x 11_CreateSchema.sh
+./11_CreateSchema.sh
+
+# get the passwords for the users
+USERS="SOE WALICE"
+for i in $USERS
+do
+PWD="$(/AXIS/ADMINDB/stdproc/script/genpass2.pl $i@WALIS2P 20)"
+echo "$i/Or_$PWD"
+done
+
+
+WALICE/Or_mm6i48wFF5C3QP8O8KL4
+SOE/Or_Y85F4S3RPO7n6449hwge
+
+
+---------------prepare the target database ---------------------------
+
+-- on the target server (s15421u0, database WALIS2P)
+
+
+# Recuperation de l’export :
+cp -p $RepMig/expdp_full_WALIS2P_${Date}.* /ora_arch_log/$msid
+gunzip /ora_arch_log/$msid/expdp_full_WALIS2P_${Date}.*.gz
+
+
+-- set the flashback and archivelog off for import
+scr
+./manage_flashback.ksh action=OFF
+./Active_archivelog $ORACLE_SID OFF
+
+
+-- if errors regarding granting roles to users, do not consider for now
+# Creation des roles via import :
+impdp expfull/Exp_Fu11_weNwSaP2023 DIRECTORY=DATA_PUMP_DIR DUMPFILE=expdp_full_WALIS2P_${Date}.%U.dmp LOGFILE=impdp_WALIS2P.${Date}_ROLES.log PARALLEL=2 TABLE_EXISTS_ACTION=truncate INCLUDE=ROLE INCLUDE=ROLE_GRANT
+
+
+# 8.3.3.3	Fichier parametre avec remapping de schemas (dans le cas ou un user contient le trigramme DBA)
+fileManageSchema=$lScriptsMig/11_CreateSchema.sh
+vToSch=`cat $fileManageSchema |grep PWDLEN |sort |awk ' BEGIN { s1=""; } { s=$3; gsub("\"","",s); gsub("schema=","",s); s1=s1","s;  } END { sub("\,","",s1); print "TOSCHEMA="s1 }'`
+vSch=`cat $fileManageSchema |grep ^# |grep DATA01 |sort |awk ' BEGIN { s1=""; } { s=$2; gsub("\"","",s); s1=s1","s;  } END { sub("\,","",s1); print "SCHEMA="s1 }'`
+vFromAppl="FROMAPPL=`echo | awk -v s="WALIS2P" '(s~"DB"){ca=substr(s,1,index(s,"DB")-1)} (s!~"DB"){ca=substr(s,1,length(s)-3)}  END { print ca }'`"
+vDump="DUMP=expdp_full_WALIS2P_${Date}.%U.dmp"
+fileImpdpParam=$lScriptsMig/impdp_Schemas_WALIS2P.par
+echo "userID=\"/ as sysdba\"" > $fileImpdpParam
+scr
+./gen_import_dp_db_instance19_par.pl $vToSch $vSch $vDump $vFromAppl | tr " " "\n" |tail +5 |head -n 6 |grep -v "ulogin" >> $fileImpdpParam
+cat << EOF >> $fileImpdpParam
+LOGFILE=impdp_Upgrade19c_WALIS2P_$(date '+%Y%m%d').log
+PARALLEL=4
+STREAMS_CONFIGURATION=NO
+EXCLUDE=PROFILE:\"IN \(\'DEFAULT\'\)\",SCHEMA:\"IN \(\'RECOVERY_CATALOG_OWNER_VPD\',\'XS_CONNECT\',\'SYSUMF_ROLE\',\'SYS\',\'SYSTEM\'\)\",ROLE:\"IN \(\'SODA_APP\'\)\" 
+EXCLUDE=STATISTICS
+LOGTIME=ALL 
+METRICS=YES
+EOF
+
+
+
+# 8.3.3.4	Fichier parametre sans remapping de schemas
+
+fileManageSchema=$lScriptsMig/11_CreateSchema.sh
+vToSch=`cat $fileManageSchema |grep PWDLEN |sort |awk ' BEGIN { s1=""; } { s=$3; gsub("\"","",s); gsub("schema=","",s); s1=s1","s;  } END { sub("\,","",s1); print s1 }'`
+fileImpdpParam=$lScriptsMig/impdp_Schemas_WALIS2P.par
+echo "userID=\"/ as sysdba\"" > $fileImpdpParam
+cat << EOF >> $fileImpdpParam
+DIRECTORY=DATA_PUMP_DIR
+SCHEMAS=$vToSch
+DUMPFILE=expdp_full_WALIS2P_${Date}.%U.dmp
+LOGFILE=impdp_Upgrade19c_WALIS2P_$(date '+%Y%m%d').log
+PARALLEL=4
+STREAMS_CONFIGURATION=NO
+EXCLUDE=PROFILE:\"IN \(\'DEFAULT\'\)\",SCHEMA:\"IN \(\'RECOVERY_CATALOG_OWNER_VPD\',\'XS_CONNECT\',\'SYSUMF_ROLE\',\'SYS\',\'SYSTEM\'\)\",ROLE:\"IN \(\'SODA_APP\'\)\" 
+EXCLUDE=STATISTICS
+LOGTIME=ALL 
+METRICS=YES
+EOF
+
+
+-- schema import with the data exported at the SCN
+impdp parfile="$fileImpdpParam"
+
+
+scr
+./Active_archivelog $ORACLE_SID ON
+./manage_flashback.ksh action=ON
+
+
+-- on the target server (s15421u0, database WALIS2P)
+
+echo ${ORACLE_HOME}
+echo ${ORACLE_SID}
+echo ${TNS_ADMIN}
+
+
+-- configure the init.ora parameters for GoldenGate
+
+sqlplus / as sysdba  <<END
+alter system set enable_goldengate_replication=true scope=both;
+alter system set streams_pool_size=200M scope=both;
+alter database force logging;
+alter database add supplemental log data (primary key,unique,foreign key,all) columns;
+alter system set undo_management=auto scope=spfile;
+alter system set undo_retention = 86400; 
+alter system switch logfile;
+create pfile from spfile;
+shutdown immediate;
+startup;
+END
+
+
+-- re-create the OGG_OWNER user on the target database 
+scr
+./manage_schema.pl sid=$ORACLE_SID schema=GGS_OWNER remove=Y
+./manage_schema.pl SCHEMA=GGS_OWNER DATA01=1 temp=1 maxsize=32000 PWDLEN=20 AFFPWD=ON
+
+# Creation du schema GGS_OWNER :   Or_a8N66449HH6V5SRb807m
+
+-- grant privileges to GGS_OWNER user
+sqlplus / as sysdba << END
+grant connect,resource,dba  to GGS_OWNER;
+grant create session        to GGS_OWNER;
+grant flashback any table   to GGS_OWNER;
+exec dbms_goldengate_auth.grant_admin_privilege('GGS_OWNER');
+exec dbms_streams_auth.grant_admin_privilege('GGS_OWNER');
+END
+
+
+-- create the user mysystem on the target database in order to perform administrative tasks, this user will not be imported on the target
+sqlplus / as sysdba <<END
+create user mysystem identified by "SafranAircraft1!";
+grant connect,resource,dba to mysystem;
+grant sysdba to mysystem;
+END
+
+
+sqlplus /nolog << SQL
+conn /as sysdba
+@?/rdbms/admin/utlrp.sql
+SQL
+
+fileObjInvalid=$lScriptsMig/25_info_ObjetsInvalides_${ORACLE_SID}.txt
+cat /dev/null > $fileObjInvalid
+sqlplus /nolog << SQL |egrep -v "Copyright|SQL|OLAP|19.20|Connected|19.0.0.0.0" |sed '/^$/d' |sed 's/SYS@ALTS1T >//g' |tee -a $fileObjInvalid>/dev/null
+conn /as sysdba
+set lines 300
+set PAGESIZE 9999
+SET LONG 2000000
+SET LONGCHUNKSIZE 20000
+Prompt Invalid objects list
+Prompt ====================
+select owner, object_type, object_name from dba_objects
+Where status = 'INVALID';
+SQL
+
+
+-- check and validate the MSR rules on the target DB
+
+scr
+./check_msr_db
+
+
+
+----------------------------- Create the replicat process -------------------------------
+
+-- on the goldengate server (s17650b0)
+
+-- Support for Oracle Sequences
+-- From the SQL prompt, run the script $OGG_HOME/lib/sql/legacy/sequence.sql on the source and target database as a DBA.
+-- if you get this error, you can temporarily add SQLNET.ALLOW_WEAK_CRYPTO_CLIENTS=TRUE in $TNS_ADMIN/sqlnet.ora on the database server and reload the listener: lsnrctl reload LISTENER
+-- ERROR: ORA-12643: Client received internal error from server
+
+-- on the goldengate server (s17650b0)
+
+cd $OGG_HOME/lib/sql/legacy
+sqlplus mysystem/"SafranAircraft1!"@s15421u0.snm.snecma:5225/WALIS2P as sysdba
+@sequence
+Please enter the name of a schema for the GoldenGate database objects:
+GGS_OWNER
+
+STATUS OF SEQUENCE SUPPORT
+--------------------------------------------------------------
+SUCCESSFUL installation of Oracle Sequence Replication support
+
+
+adminclient
+connect https://s17650b0:443 as oggadmin !
+
+-- create an alias to the target database: naming convention : al_tgt_<target_server_name>_<target_DB_NAME>
+
+alter credentialstore delete user al_tgt_s15421u0_WALIS2P domain DEV
+alter credentialstore add user ggs_owner@(DESCRIPTION=(ADDRESS=(PROTOCOL=TCP)(HOST=s15421u0.snm.snecma)(PORT=5225))(CONNECT_DATA=(SERVER=DEDICATED)(SERVICE_NAME=WALIS2P))) password "Or_a8N66449HH6V5SRb807m" alias al_tgt_s15421u0_WALIS2P domain DEV
+
+
+-- create the checkpoint table and heartbeattable in the target database -- this is mandatory
+
+dblogin useridalias al_tgt_s15421u0_WALIS2P domain DEV
+add checkpointtable ggs_owner.chkptab
+add heartbeattable
+
+info checkpointtable ggs_owner.*
+info heartbeattable
+
+
+-- connect to the target database and create a parallel integrated replicat process: replicat naming convention : rep1 (must be 5 chars, or if exists, rep2,rep3, etc), replicat exttrail naming convention : <target_server_name>_<target_DB_name>/rt
+dblogin useridalias al_tgt_s15421u0_WALIS2P domain DEV
+add replicat rep1, parallel, integrated, exttrail s15421u0_WALIS2P/rt checkpointtable ggs_owner.chkptab
+
+
+-- create the parameter file for the replicat process
+edit params rep1
+
+-----------------------------------------------------------------------------
+replicat rep1
+useridalias al_tgt_s15421u0_WALIS2P domain DEV
+reportcount every 1 minute, rate
+reportrollover at 01:00 on sunday
+discardrollover at 01:00 on sunday
+dboptions enable_instantiation_filtering
+ddl include mapped
+ddlsubst 'SOE_DATA' with 'WALI_SOE_DATA01' include all objtype 'TABLE'
+ddlsubst 'SOE_DATA' with 'WALI_SOE_INDEX01' include all objtype 'INDEX'
+ddlerror default ignore
+reperror (default,ignore)
+ddloptions report
+allownoopupdates
+applynoopupdates
+map_parallelism 3
+min_apply_parallelism 2
+max_apply_parallelism 4
+split_trans_recs 10000
+handlecollisions
+gettruncates
+map WALICE.*, target WALICE.*;
+map WALICE_LECT.*, target WALICE_LECT.*;
+map SOE.*, target SOE.*;
+-----------------------------------------------------------------------------
+
+-- start the replicat process and check if it runs correctly
+-- make sure to pick the correct Oracle SCN obtained before launching the extract
+
+start replicat rep1 aftercsn 434916554
+info replicat rep1 detail
+view report rep1
+
+
+-- at this point, we should have the extract and the replicat running. 
+
+
+
+----------------------------- create and start the distpath process -------------------------------
+
+-- create an alias for the distribution path on the Network domain: naming convention : al_dp1 (if exists, al_dp2, al_dp3, etc)
+
+alter credentialstore delete user al_dp1 domain Network
+-- naming convention : (30 chars max) ggma_dp1 (if exists, ggma_dp2,ggma_dp3, etc)
+alter credentialstore add user ggma_dp1 alias al_dp1 domain Network password "SafranAircraft1!"
+
+stop distpath ltrt1
+delete distpath ltrt1
+
+-- add the distribution path : naming convention : ltrt1 (if exists, ltrt2,ltrt3, etc)
+add distpath ltrt1 source trail://127.0.0.1:9002/services/OGG21_SAE/v2/sources?trail=s05606w0_WALIS2P/lt target ogg://127.0.0.1:9003/services/OGG21_SAE/v2/targets?trail=s15421u0_WALIS2P/rt authentication useridalias al_dp1 domain Network
+
+
+-- We should start the distpath process to transfer the extract trail 'lt' into the replicat trail 'rt' for being applied to the target database
+
+-- start the distpath process and check if it runs correctly
+-- make sure the GoldenGate 21c Microservices Data Home (trail file location) is correctly set, see Doc ID 3090889.1
+start distpath ltrt1
+info distpath ltrt1 detail
+
+
+-- at this point, the transactions performed on the source db after the export will be replayed on the target db, and the replication works to catch up the delta
+
+----------------------------- checks and tests ------------------------------------
+
+-- on the goldengate server (s17650b0)
+
+-- check the lag for the extract and the replicat processes
+lag extract ext1
+lag replicat rep1
+
+-- show the statistics for the extract and replicat processes
+stats extract ext1, total, reportrate min
+stats replicat rep1, total, reportrate min
+
+-- check if the extract and replicat processed all records from the trail
+send extract ext1 logend
+send replicat rep1 logend
+
+
+-- we should check the count of some tables to see if it is at a minimum of difference
+-- once the lag is small and the counts are close, we should prepare for the application switch
+-- disconnect the application on the source and waits for the replication to catch up
+
+-- some checks if the replication works (at DML and DDL levels)
+
+
+
+-- on the source server (s05606w0, base WALIS2P)
+
+-- create a table into a replicated schema, it should be replicated on the target database
+s05606w0:WALIS2P:WALIS2P_s06894w0:SYS
+
+sqlplus / as sysdba << END
+create table d3.toto3(id number);
+insert into d3.toto3 values(100);
+commit;
+desc d3.toto3
+select * from d3.toto3;
+END
+
+
+-- on the source server (s05606w0, base WALIS2P)
+
+-- drop the table, the drop should be replicated
+s05606w0:WALIS2P:WALIS2P_s06894w0:SYS
+
+sqlplus / as sysdba << END
+drop table d3.toto3;
+END
+
+
+-- on the target server (s15421u0, database WALIS2P)
+
+-- the drop was replicated
+s15421u0:WALIS2P:WALIS2P_s15421u0:SYS
+SQL> desc d3.toto
+ERROR:
+ORA-04043: object d3.toto does not exist
+
+
+-- at this point, the delta replication of transactions is done and we can connect the application to the new target database
+
+-- eventually the replication can be inversed to have the target database replicate into the source one, to keep in sync 
+-- the old source database with the transactions performed on the target database
+
+
+
+----------------------- stopping and deleting : cleanning up the change synchronization processes and files --------------------------------------
+
+-- on goldengate server (s17650b0)
+
+-- connect to the source database
+dblogin useridalias al_src_s05606w0_WALIS2P domain DEV
+
+-- stop, delete and purge the extract
+stop extract ext1
+delete extract ext1
+purge exttrail s05606w0_WALIS2P/lt
+
+-- delete the schematrandata
+delete schematrandata WALICE allcols
+delete schematrandata WALICE_LECT allcols
+delete schematrandata SOE allcols
+
+-- delete the trandata
+delete trandata WALICE.* allcols
+delete trandata WALICE_LECT.* allcols
+delete trandata SOE.* allcols
+
+
+-- connect to the target database
+dblogin useridalias al_tgt_s15421u0_WALIS2P domain DEV
+
+-- stop, delete and purge the replicat
+stop replicat rep1
+delete replicat rep1
+purge exttrail s15421u0_WALIS2P/rt
+
+-- stop and delete the distpath
+stop distpath ltrt1
+delete distpath ltrt1
+
+-- delete the goldengate aliases 
+alter credentialstore delete user al_dp1 domain Network
+alter credentialstore delete user al_src_s05606w0_WALIS2P domain DEV
+alter credentialstore delete user al_tgt_s15421u0_WALIS2P domain DEV
+
+-- on the source server (s05606w0, base WALIS2P)
+
+-- drop the user GGS_OWNER and the tablespace GG_DATA
+sqlplus / as sysdba <<END
+alter database no force logging;
+alter database drop supplemental log data (primary key,unique,foreign key,all) columns;
+drop user GGS_OWNER cascade;
+drop user mysystem cascade;
+drop tablespace WALI_GGS_OWNER_DATA01 including contents and datafiles;
+drop tablespace WALI_GGS_OWNER_INDEX01 including contents and datafiles;
+drop tablespace WALI_GGS_OWNER_TEMP including contents and datafiles;
+drop user soe cascade;
+drop tablespace SOE_DATA including contents and datafiles;
+END
+
+-- on the target server (s15421u0, database WALIS2P)
+
+-- drop the user GGS_OWNER and the tablespace GG_DATA
+sqlplus / as sysdba <<END
+alter database no force logging;
+alter database drop supplemental log data (primary key,unique,foreign key,all) columns;
+drop user GGS_OWNER cascade;
+drop user mysystem cascade;
+drop tablespace WALI_GGS_OWNER_DATA01  including contents and datafiles;
+drop tablespace WALI_GGS_OWNER_INDEX01 including contents and datafiles;
+drop tablespace WALI_GGS_OWNER_TEMP including contents and datafiles;
+drop user soe cascade;
+drop tablespace WALI_SOE_DATA01 including contents and datafiles;
+drop tablespace WALI_SOE_INDEX01 including contents and datafiles;
+drop tablespace WALI_SOE_TEMP including contents and datafiles; 
+END
+
+
