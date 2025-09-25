@@ -779,15 +779,24 @@ info distpath ltrt1 detail
 -- on the goldengate server (s17650b0)
 
 -- check the lag for the extract and the replicat processes
+dblogin useridalias al_src_s05606w0_WALIS2P domain DEV
 lag extract ext1
+
+dblogin useridalias al_tgt_s15421u0_WALIS2P domain DEV
 lag replicat rep1
 
 -- show the statistics for the extract and replicat processes
+dblogin useridalias al_src_s05606w0_WALIS2P domain DEV
 stats extract ext1, total, reportrate min
+
+dblogin useridalias al_tgt_s15421u0_WALIS2P domain DEV
 stats replicat rep1, total, reportrate min
 
 -- check if the extract and replicat processed all records from the trail
+dblogin useridalias al_src_s05606w0_WALIS2P domain DEV
 send extract ext1 logend
+
+dblogin useridalias al_tgt_s15421u0_WALIS2P domain DEV
 send replicat rep1 logend
 
 

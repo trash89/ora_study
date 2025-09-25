@@ -18,10 +18,6 @@ Latest GoldenGate/Database (OGG/RDBMS) Patch recommendations (Doc ID 2193391.1)
 -- create SOE user and schema using oewizard from swingbench
 ./oewizard -cl -create -dt thin -nc -cs o12c:1521/ORCL -u soe -p soe -scale 1 -tc 2 -dba "sys as sysdba" -dbap manager -ts SOE_DATA -normalfile -df "/u02/oradata/ORCL/soe_data01.dbf"
 
--- run the bench
-./charbench -c ../configs/SOE_Server_Side_V2.xml -u soe -p soe -uc 10 -cs o12c:1521/ORCL -min 0 -max 5 -intermin 0 -intermax 0 -v users,tps
-
-
 -- activate the constraints that are not validated, especially the PK constraints
 SQL> @constr_not_valid
 Owner?(%)      : SOE
@@ -94,15 +90,14 @@ User dropped.
 -- configure the init.ora parameters for GoldenGate
 
 sqlplus / as sysdba  <<END
-startup;
 alter system set enable_goldengate_replication=true scope=both;
 alter system set streams_pool_size=1G scope=both;
 alter database force logging;
 alter database add supplemental log data (primary key,unique,foreign key,all) columns;
 alter system switch logfile;
-alter system switch logfile;
 alter system set undo_management=auto;
-alter system set undo_retention = 86400; -- 86400 seconds = 24 hours
+alter system set undo_retention = 86400; 
+rem -- 86400 seconds = 24 hours
 alter system switch logfile;
 create pfile from spfile;
 END
@@ -111,57 +106,31 @@ END
 -- create the gg_data tablespace and the ggs_owner user
 sqlplus / as sysdba << END
 create tablespace GG_DATA datafile '/u02/oradata/ORCL/gg_data01.dbf' size 1m autoextend on next 1m;
-create user GGS_OWNER identified by GGS_OWNER default tablespace GG_DATA temporary tablespace temp;
+create user GGS_OWNER identified by ggs_owner default tablespace GG_DATA temporary tablespace temp;
 grant connect,resource,dba  to GGS_OWNER;
 grant create session        to GGS_OWNER;
 grant flashback any table   to GGS_OWNER;
 exec dbms_goldengate_auth.grant_admin_privilege('GGS_OWNER');
 exec dbms_streams_auth.grant_admin_privilege('GGS_OWNER');
-END
-
-
-
-Steps to disable the “auto space advisor”
-
-1. Check the status of the “auto space advisor”.
-
-SQL> SELECT client_name, status FROM dba_autotask_client;
-set lines 180 pages 1000
-col client_name for a40
-col attributes for a60
-select client_name, status,attributes,service_name from dba_autotask_client;
-2. Execute the below to disable the “auto space advisor”.
-
 BEGIN
-DBMS_AUTO_TASK_ADMIN.disable(
-client_name => 'auto space advisor',
-operation => NULL,
-window_name => NULL);
+  DBMS_AUTO_TASK_ADMIN.disable(client_name => 'auto space advisor',operation => NULL,window_name => NULL);
 END;
 /
-
-3. Check if the “auto space advisor” is disabled.
-
-set lines 180 pages 1000
-col client_name for a40
-col attributes for a60
-select client_name, status,attributes,service_name from dba_autotask_client;
-
-Remote Capture – OGG-00446 Could Not Find Archived Log
-Install Oracle Client 11.2.0.4 and use the parameter TRANLOGOPTIONS DBLOGREADER in the Extract process parameter file. Restart the Extract process.
-
+END
 
 -- to support replication of sequences
-cd /u01/app/oracle/product/gg21/lib/sql/legacy
-sqlplus / as sysdba
 
-@sequence 
+-- on the goldengate server (gg21)
+
+cd /u01/app/oracle/product/gg21/lib/sql/legacy
+sqlplus sys/manager@o12c:1521/ORCL as sysdba
+
+@sequence
 Please enter the name of a schema for the GoldenGate database objects:
 GGS_OWNER
 Setting schema name to GGS_OWNER
 
 ALTER TABLE sys.seq$ ADD SUPPLEMENTAL LOG DATA (PRIMARY KEY) COLUMNS;
-
 
 
 ---------------prepare the target database ---------------------------
@@ -171,36 +140,61 @@ ALTER TABLE sys.seq$ ADD SUPPLEMENTAL LOG DATA (PRIMARY KEY) COLUMNS;
 -- configure the init.ora parameters for GoldenGate
 
 sqlplus / as sysdba  <<END
-startup;
 alter system set enable_goldengate_replication=true scope=both;
 alter system set streams_pool_size=1G scope=both;
 alter database force logging;
 alter database add supplemental log data (primary key,unique,foreign key,all) columns;
 alter system switch logfile;
 alter system set undo_management=auto;
-alter system set undo_retention = 86400; -- 86400 seconds = 24 hours
+alter system set undo_retention = 86400;
+rem -- 86400 seconds = 24 hours
+alter system switch logfile;
 create pfile from spfile;
 END
+
+-- on the target server (o19cs)
+
+-- delete old ggs_owner user
+cd /u01/app/oracle/product/gg23/lib/sql/legacy
+sqlplus / as sysdba
+SQL> @ddl_remove
+Enter Oracle GoldenGate schema name:GGS_OWNER
+SQL> @marker_remove
+Enter Oracle GoldenGate schema name:GGS_OWNER
+SQL> @remove_seq
+Please enter the name of a schema for the GoldenGate database objects:
+GGS_OWNER
+Setting schema name to GGS_OWNER
+SQL> drop user ggs_owner cascade;
+
+User dropped.
 
 
 -- create the gg_data tablespace and the ggs_owner user
 
 sqlplus / as sysdba << END
 create tablespace GG_DATA datafile '/u02/oradata/ORCL/gg_data01.dbf' size 1m autoextend on next 1m;
-create user GGS_OWNER identified by GGS_OWNER default tablespace GG_DATA temporary tablespace temp;
+create user GGS_OWNER identified by ggs_owner default tablespace GG_DATA temporary tablespace temp;
 grant connect,resource,dba  to GGS_OWNER;
 grant create session        to GGS_OWNER;
 grant flashback any table   to GGS_OWNER;
 exec dbms_goldengate_auth.grant_admin_privilege('GGS_OWNER');
 exec dbms_streams_auth.grant_admin_privilege('GGS_OWNER');
+BEGIN
+  DBMS_AUTO_TASK_ADMIN.disable(client_name => 'auto space advisor',operation => NULL,window_name => NULL);
+END;
+/
 END
 
 
 -- to support replication of sequences
-cd /u01/app/oracle/product/gg21/lib/sql/legacy
-sqlplus / as sysdba
 
-@sequence 
+-- on the goldengate server (gg21)
+
+cd /u01/app/oracle/product/gg21/lib/sql/legacy
+sqlplus sys/manager@o19cs:1521/ORCL as sysdba
+
+@sequence
 Please enter the name of a schema for the GoldenGate database objects:
 GGS_OWNER
 Setting schema name to GGS_OWNER
@@ -221,22 +215,23 @@ connect http://gg21:5001 as ggma
 info credentialstore domain OracleGoldenGate
 info credentialstore domain Network
 
--- delete the old alias
-alter credentialstore delete user alias_db_source domain OracleGoldenGate
-alter credentialstore delete user alias_db_target domain OracleGoldenGate
-alter credentialstore delete user alias_distpath domain Network
-
 -- add the alias to the source database
+alter credentialstore delete user alias_db_source domain OracleGoldenGate
 alter credentialstore add user ggs_owner@o12c:1521/ORCL password ggs_owner alias alias_db_source domain OracleGoldenGate
 
 -- add the alias to the target database
+alter credentialstore delete user alias_db_target domain OracleGoldenGate
 alter credentialstore add user ggs_owner@o19cs:1521/ORCL password ggs_owner alias alias_db_target domain OracleGoldenGate
 
--- add alias for the Network domain to be used by the distpath
-alter credentialstore add user ggma_distpath alias alias_distpath domain Network password slayer
+-- set the goldengate globals
 
--- add the distribution path
-add distpath ltrt source trail://gg21:5003/services/v2/sources?trail=lt target ws://gg21:5004/services/v2/targets?trail=rt authentication useridalias alias_distpath domain Network
+edit globals
+-----------------------------
+ggschema ggs_owner
+checkpointtable ggs_owner.chkptab
+-----------------------------
+
+view globals
 
 
 -- create the checkpoint table and heartbeattable in the source database
@@ -272,15 +267,6 @@ view globals
 
 info credentialstore
 
-OGG (http://gg21:5001 udepl1 as alias_db_target@ORCL) 12> INFO CREDENTIALSTORE
-
-Default domain: OracleGoldenGate
-
-  Alias: alias_db_source
-  Userid: ggs_owner@o12c:1521/ORCL
-
-  Alias: alias_db_target
-  Userid: ggs_owner@o19cs:1521/ORCL
 
 ------------------ prepare the source database for instantiation ---------------------------------------
 
@@ -291,7 +277,7 @@ add schematrandata SOE allcols preparecsn nowait
 -- use add trandata for source database versions versions < Oracle 12.2
 -- add trandata SOE.* allcols preparecsn nowait
 
-info schematrandata SOE.*
+info schematrandata SOE
 
 -- use add trandata for source database versions versions < Oracle 12.2
 add trandata SOE.* allcols preparecsn nowait
@@ -347,6 +333,10 @@ view report ext1
 
 -- we will perform the expdp/impdp to instantiatiate the target database at the scn prepared by add schematrandata/trandata
 
+-- run the bench
+./charbench -c ../configs/SOE_Server_Side_V2.xml -u soe -p soe -uc 10 -cs o12c:1521/ORCL -min 0 -max 5 -intermin 0 -intermax 0 -v users,tps
+
+
 -- on the source server (o12c)
 
 -------------------  perform the source database export -------------------------------------
@@ -399,7 +389,8 @@ scp /u01/app/oracle/admin/ORCL/dpdump/users_SOE02.dmp o19cs:/u01/app/oracle/admi
 
 -- creating the necessary tablespaces
 sqlplus / as sysdba << END
-create tablespace SOE datafile '/u02/oradata/ORCL/soe_data01.dbf' size 1m autoextend on next 1m;
+create tablespace SOE_DATA datafile '/u02/oradata/ORCL/soe_data01.dbf' size 1m autoextend on next 1m;
+create tablespace SOE_INDX datafile '/u02/oradata/ORCL/soe_indx01.dbf' size 1m autoextend on next 1m;
 END
 
 
@@ -426,8 +417,9 @@ dumpfile        = users_SOE%U.dmp
 logfile         = users_SOE_IMP.log
 schemas         = SOE
 parallel        = 2
-transform       = storage:n
-transform       = segment_attributes:n
+#transform       = storage:n
+#transform       = segment_attributes:n
+remap_tablespace=SOE:SOE_DATA
 END
 
 -- import the schemas
@@ -466,6 +458,8 @@ reportrollover at 01:00 on sunday
 discardrollover at 01:00 on sunday
 dboptions enable_instantiation_filtering
 ddl include mapped
+ddlsubst 'SOE' with 'SOE_DATA' include all objtype 'TABLE'
+ddlsubst 'SOE' with 'SOE_INDX' include all objtype 'INDEX'
 ddlerror default abend
 reperror (default,abend)
 ddloptions report
@@ -490,7 +484,15 @@ view report rep1
 
 -- at this point, we should have the extract and the replicat running. 
 
------------------------------ start the distpath process -------------------------------
+----------------------------- create and start the distpath process -------------------------------
+
+-- add alias for the Network domain to be used by the distpath
+alter credentialstore delete user alias_distpath domain Network
+alter credentialstore add user ggma_distpath alias alias_distpath domain Network password slayer
+
+-- add the distribution path
+delete distpath ltrt
+add distpath ltrt source trail://gg21:5003/services/v2/sources?trail=lt target ogg://gg21:5004/services/v2/targets?trail=rt authentication useridalias alias_distpath domain Network
 
 -- We should start the distpath to transfer the extract trail into the replicat trail for being applied to the target by the replicat process
 
@@ -506,14 +508,18 @@ info distpath ltrt detail
 -- on the goldengate server (gg21)
 
 -- we check the lag for the extract and the replicat
+dblogin useridalias alias_db_source domain OracleGoldenGate
 lag extract ext1
+dblogin useridalias alias_db_target domain OracleGoldenGate
 lag replicat rep1
 
 -- statistics for extract and replicat
 stats extract ext1, total, reportrate min
 stats replicat rep1, total, reportrate min
 
+dblogin useridalias alias_db_source domain OracleGoldenGate
 send extract ext1 logend
+dblogin useridalias alias_db_target domain OracleGoldenGate
 send replicat rep1 logend
 
 -- we should check the count of some tables to see if it is at a minimum of difference
@@ -529,6 +535,13 @@ send replicat rep1 logend
 sqlplus / as sysdba<<END
 create table SOE.toto(id number);
 insert into SOE.toto values(100);
+commit;
+END
+
+sqlplus / as sysdba<<END
+drop table SOE.toto_id;
+create table SOE.toto_id(id number generated always as identity,col2 varchar2(10));
+insert into SOE.toto_id(col2) values('value 1');
 commit;
 END
 
