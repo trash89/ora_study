@@ -143,10 +143,10 @@ usage: parameters:
 
 ./oewizard -cl -create -cs //localhost/PDB1 -u soe -p soepassword -scale 50 -tc 32 -dba "sys as sysdba" -dbap welcome1 -ts +DATA
 ./swingbench -c ../configs/SOE_Server_Side_V2.xml -u soe -p soe -cs //localhost/orderentry -min 0 -max 10 -intermin 200 -intermax 500 -dim 1024,768 -pos 100,100 
-./charbench -c ../configs/SOE_Server_Side_V2.xml -u soe -p soe -uc 4 -cs //localhost/orderentry -min 0 -max 10 -intermin 200 -intermax 500 -v users,tpm,tps,errs,vresp
+./charbench -c ../configs/SOE_Server_Side_V2.xml -u soe -p soe -uc 4 -rt "00:05" -dt thin -cs //localhost/orderentry -min 0 -max 0 -intermin 0 -intermax 0 -v users,tpm,tps,errs,vresp
 
 -- create SOE user and schema using oewizard from swingbench
 ./oewizard -cl -create -dt thin -nc -cs o12c:1521/ORCL -u soe -p soe -scale 1 -tc 2 -dba "sys as sysdba" -dbap manager -ts SOE_DATA -normalfile -df "/u02/oradata/ORCL/soe_data01.dbf"
 
 -- run the bench
-./charbench -c ../configs/SOE_Server_Side_V2.xml -u soe -p soe -uc 10 -cs o12c:1521/ORCL -min 0 -max 5 -intermin 0 -intermax 0 -v users,tps
+./charbench -c ../configs/SOE_Server_Side_V2.xml -u soe -p soe -uc 10 -rt "00:05" -dt thin -cs o12c:1521/ORCL -min 0 -max 0 -intermin 0 -intermax 0 -v users,tps

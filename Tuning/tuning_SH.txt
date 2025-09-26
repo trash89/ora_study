@@ -4,7 +4,7 @@
 -nc \
 -uc 10 \
 -u sh -p sh -cs o19cspdb1 \
--rt 00:05 \
+-rt "00:05" \
 -rr 10 \
 -dbau system -dbap manager \
 -v tpm,tps,resp,dml

@@ -388,7 +388,7 @@ END
 -- on the goldengate server (s17650b0)
 
 cd /home/oracle/swingbench/bin
-./charbench -c ../configs/SOE_Server_Side_V2.xml -u soe -p soe -uc 10 -cs s05606w0.snm.snecma:1521/WALIS2P -min 0 -max 5 -intermin 0 -intermax 0 -v users,tps
+./charbench -c ../configs/SOE_Server_Side_V2.xml -u soe -p soe -uc 10 -rt "00:05" -dt thin -cs s05606w0.snm.snecma:1521/WALIS2P -min 0 -max 0 -intermin 0 -intermax 0 -ld 0 -mr -nc -v users,tps
 
 ---------------------------------------------------------------------------------------------------------------------------------------
 
