@@ -6,6 +6,8 @@ sudo su - oracle
 scr
 ./Clone_db_online_12 srvsrc=s03758b0 srvtrg=s05606w0 sidsrc=WALIS1P sidtrg=WALIS2P
 
+-- after clonning, change the password for the user CONNECTEST/"OraCheckConnection!2022" and check the $TNS_ADMIN/tnsnames.ora for the listener port 
+lsnrctl reload LISTENER
 
 
 
@@ -46,7 +48,7 @@ echo ${ORACLE_HOME}
 echo ${ORACLE_SID}
 echo ${TNS_ADMIN}
 
--- check the constraints not valudated, especially PK and UK and validate it 
+-- check the constraints not validated, especially PK and UK and validate it 
 SELECT constraint_name,constraint_type,table_name,status,validated,invalid
 FROM dba_constraints
 WHERE
@@ -75,10 +77,15 @@ alter table <schema>.<table_name> logging;
 alter index <schema>.<index_name> logging;
 
 
+-- TODO: script tab_wo_pk.sql
+--- detect the tables without PK/UK and apply the note DocID 1271578.1
+
+
+
+
 -- configure the init.ora parameters for GoldenGate
 
 sqlplus / as sysdba  <<END
-startup;
 alter system set enable_goldengate_replication=true scope=both;
 alter system set streams_pool_size=200M scope=both;
 alter database force logging;
@@ -94,7 +101,7 @@ END
 scr
 ./manage_schema.pl sid=$ORACLE_SID schema=GGS_OWNER remove=Y
 ./manage_schema.pl SCHEMA=GGS_OWNER DATA01=1 temp=1 maxsize=32000 PWDLEN=20 AFFPWD=ON
-Creation du schema GGS_OWNER :   a8n66449.                                                                                                                                                                                                                                                                                        
+Creation du schema GGS_OWNER :   Or_a8N66449HH6V5SRb807m.
 
 
 sqlplus / as sysdba << END
@@ -148,8 +155,8 @@ info credentialstore domain Network
 
 -- create an alias to the source database : naming convention: al_src_<source_server_name>_<source_DB_name>
 alter credentialstore delete user al_src_s05606w0_WALIS2P domain DEV
-alter credentialstore add user ggs_owner@(DESCRIPTION=(ADDRESS=(PROTOCOL=TCP)(HOST=s05606w0.snm.snecma)(PORT=1521))(CONNECT_DATA=(SERVER=DEDICATED)(SERVICE_NAME=WALIS2P))) password "a8n66449" alias al_src_s05606w0_WALIS2P domain DEV
-
+alter credentialstore add user ggs_owner@(DESCRIPTION=(ADDRESS=(PROTOCOL=TCP)(HOST=s05606w0.snm.snecma)(PORT=1521))(CONNECT_DATA=(SERVER=DEDICATED)(SERVICE_NAME=WALIS2P))) password "Or_a8N66449HH6V5SRb807m" alias al_src_s05606w0_WALIS2P domain DEV
+dblogin useridalias al_src_s05606w0_WALIS2P domain DEV
 
 info credentialstore domain DEV
 
@@ -187,21 +194,16 @@ dblogin useridalias al_src_s05606w0_WALIS2P domain DEV
 
 add schematrandata WALICE allcols preparecsn nowait
 add schematrandata WALICE_LECT allcols preparecsn nowait
-add schematrandata SOE allcols preparecsn nowait
 
 info schematrandata WALICE
 info schematrandata WALICE_LECT
-info schematrandata SOE
 
 -- use add trandata for source database versions versions < Oracle 12.2
 add trandata WALICE.* allcols preparecsn nowait
 add trandata WALICE_LECT.* allcols preparecsn nowait
-add trandata SOE.* allcols preparecsn nowait
-
 
 info trandata WALICE.*
 info trandata WALICE_LECT.*
-info trandata SOE.*
 
 exit
 
@@ -287,11 +289,34 @@ alter index "SOE"."CARDDETAILS_CUST_IX" logging;
 
 END
 
+-- on the goldengate server (s17650b0)
+
+adminclient
+connect https://s17650b0:443 as oggadmin !
+
+-- add schematrandata to prepare the tables (will add columns to data dictionary to keep the instantiation scn)
+
+-- connect to the source database with gg
+dblogin useridalias al_src_s05606w0_WALIS2P domain DEV
+
+add schematrandata SOE allcols preparecsn nowait
+
+info schematrandata SOE
+
+-- use add trandata for source database versions versions < Oracle 12.2
+add trandata SOE.* allcols preparecsn nowait
+
+
+info trandata SOE.*
+
 
 
 ----------------------------- Create the extract process -------------------------------
 
 -- on the goldengate server (s17650b0)
+
+adminclient
+connect https://s17650b0:443 as oggadmin !
 
 -- connect to the source database with gg
 dblogin useridalias al_src_s05606w0_WALIS2P domain DEV
@@ -323,7 +348,6 @@ table WALICE_LECT.*;
 sequence WALICE_LECT.*;
 table SOE.*;
 sequence SOE.*;
-
 ------------------------------------------------------------------
 
 
@@ -354,16 +378,19 @@ END
 
 INSTANTIATION_SCN
 -----------------
-        434916554
+        436020308
 
 
 -- on the goldengate server (s17650b0)
+
+adminclient
+connect https://s17650b0:443 as oggadmin !
 
 -- start the extract process and check if it runs correctly
 
 dblogin useridalias al_src_s05606w0_WALIS2P domain DEV
 
-start extract ext1 aftercsn 434916554
+start extract ext1 aftercsn 436020308
 info extract ext1 detail
 view report ext1
 
@@ -382,6 +409,9 @@ insert into WALICE.toto values (100);
 commit;
 END
 
+-- take a full backup
+scr
+./RMAN_bckp $ORACLE_SID FULL
 
 
 -- generate the activity for the POC, on the SOE user, will generate transactions for 10 clients for 5 minutes
@@ -389,7 +419,54 @@ END
 -- on the goldengate server (s17650b0)
 
 cd /home/oracle/swingbench/bin
-./charbench -c ../configs/SOE_Server_Side_V2.xml -u soe -p soe -uc 10 -rt "00:05" -dt thin -cs s05606w0.snm.snecma:1521/WALIS2P -min 0 -max 0 -intermin 0 -intermax 0 -ld 0 -mr -nc -v users,tps
+./charbench -c ../configs/SOE_Server_Side_V2.xml -u soe -p soe -uc 10 -rt "00:05" -cs s05606w0.snm.snecma:1521/WALIS2P -min 0 -max 0 -intermin 0 -intermax 0 -ld 0 -mr -nc -v users,tps
+
+Swingbench
+Author  :        Dominic Giles
+Version :        2.7.0.1543
+
+Results will be written to results.xml
+Expected Benchmark Runtime is set to 5 minutes.
+
+Time      Users       TPS
+10:35:12  [0/10]      0
+10:35:13  [10/10]     0
+10:35:14  [10/10]     846
+10:35:15  [10/10]     1755
+10:35:16  [10/10]     1833
+10:35:17  [10/10]     1899
+10:35:18  [10/10]     2045
+
+10:40:12  [10/10]     2536
+---------------------------------------------------------------
+|Results of Charbench Run                                     |
+---------------------------------------------------------------
+|Benchmark Name                |      "Order Entry (PLSQL) V2"|
+|Time of Run                   |     Sep 26, 2025, 10:35:12 AM|
+|Length of Benchmark           |                       0:05:00|
+|Total Logon Time              |                       0:00:00|
+|Total Completed Transactions  |                        720750|
+|Total Failed Transactions     |                             0|
+|Maximum Transactions/min      |                        148456|
+|Average Transactions/sec      |                        2402.5|
+|Total Select Statements       |                       7559995|
+|Total Insert Statements       |                       1295505|
+|Total Update Statements       |                        976588|
+|Total Delete Statements       |                             0|
+|Total Commit Statements       |                        720750|
+|Total Rollback Statements     |                             0|
+---------------------------------------------------------------
+10:40:13  [10/10]     2618
+Saved results to results.xml
+10:40:14  [0/10]      1680
+Completed Run.
+./results2pdf -c results.xml
+Results2Pdf
+Author  :        Dominic Giles
+Version :        2.7.0.1543
+Success : Pdf file results.pdf was created from results.xml results file.
+
+
 
 ---------------------------------------------------------------------------------------------------------------------------------------
 
@@ -402,13 +479,14 @@ cd /home/oracle/swingbench/bin
 
 -- check the source server listener.ora and tnsnames.ora to make sure the db is accessible @ORACLE_SID
 
+-- archivelogs backup
 scr
 ./RMAN_bckp $ORACLE_SID ARCHIVELOG
 
 
 scr
-./Clone_db_online_12_cat srvsrc=s05606w0 srvtrg=s05170e0 sidsrc=WALIS2P sidtrg=WALIS2P typeclone=RMAN scn=434916554
-
+./Clone_db_online_12_cat srvsrc=s05606w0 srvtrg=s05170e0 sidsrc=WALIS2P sidtrg=WALIS2P typeclone=RMAN scn=436020308
+-- modify the $TNS_ADMIN/tnsnames.ora, change the port for WALIS2P to 1521
 
 -- After the cloning of the source database, we create a second toto2 table
 s05606w0:WALIS2P:WALIS2P_s06894w0:SYS
@@ -488,15 +566,19 @@ vi 11_CreateSchema.sh
 ------------------------------------------------------------------------------------------------------------------------------------------------------------
 #!/bin/ksh
 # Informations pour Ajustements Nombre et Taille des Datafiles 2000 - 4000 - 8000 - 16000 - 20000 - 24000 - 32000
-#                      DATA                          1    2355
-# WALICE               DATA01                        1   15500
+#                      DATA                          1    2675
+# GGS_OWNER            DATA01                        1     100
+# GGS_OWNER            INDEX01                       1     100
+# WALICE               DATA01                        1   15600
 # WALICE               INDEX01                       1     100
 # WALICE               LOB01                         2   20800
 # Instructions de suppression et creation
+/AXIS/ADMINDB/stdproc/script/manage_schema.pl sid=$ORACLE_SID schema=GGS_OWNER remove=Y
+/AXIS/ADMINDB/stdproc/script/manage_schema.pl sid=$ORACLE_SID schema=GGS_OWNER DATA01=1 INDEX01=1 temp=1 maxsize=32000 PWDLEN=20 AFFPWD=ON
 /AXIS/ADMINDB/stdproc/script/manage_schema.pl sid=$ORACLE_SID schema=WALICE remove=Y
 /AXIS/ADMINDB/stdproc/script/manage_schema.pl sid=$ORACLE_SID schema=WALICE DATA01=1 INDEX01=1 LOB01=2 temp=1 maxsize=32000 PWDLEN=20 AFFPWD=ON
 /AXIS/ADMINDB/stdproc/script/manage_schema.pl sid=$ORACLE_SID schema=SOE remove=Y
-/AXIS/ADMINDB/stdproc/script/manage_schema.pl sid=$ORACLE_SID schema=SOE DATA01=1 temp=1 maxsize=32000 PWDLEN=20 AFFPWD=ON
+/AXIS/ADMINDB/stdproc/script/manage_schema.pl sid=$ORACLE_SID schema=SOE DATA=1 temp=1 maxsize=32000 PWDLEN=20 AFFPWD=ON
 ------------------------------------------------------------------------------------------------------------------------------------------------------------
 
 
@@ -504,7 +586,7 @@ chmod u+x 11_CreateSchema.sh
 ./11_CreateSchema.sh
 
 # get the passwords for the users
-USERS="SOE WALICE"
+USERS="GGS_OWNER SOE WALICE"
 for i in $USERS
 do
 PWD="$(/AXIS/ADMINDB/stdproc/script/genpass2.pl $i@WALIS2P 20)"
@@ -512,8 +594,9 @@ echo "$i/Or_$PWD"
 done
 
 
-WALICE/Or_mm6i48wFF5C3QP8O8KL4
+GGS_OWNER/Or_a8N66449HH6V5SRb807m
 SOE/Or_Y85F4S3RPO7n6449hwge
+WALICE/Or_mm6i48wFF5C3QP8O8KL4
 
 
 ---------------prepare the target database ---------------------------
@@ -616,7 +699,7 @@ scr
 ./manage_schema.pl sid=$ORACLE_SID schema=GGS_OWNER remove=Y
 ./manage_schema.pl SCHEMA=GGS_OWNER DATA01=1 temp=1 maxsize=32000 PWDLEN=20 AFFPWD=ON
 
-# Creation du schema GGS_OWNER :   Or_a8N66449HH6V5SRb807m
+Creation du schema GGS_OWNER :   Or_a8N66449HH6V5SRb807m
 
 -- grant privileges to GGS_OWNER user
 sqlplus / as sysdba << END
@@ -722,8 +805,8 @@ dboptions enable_instantiation_filtering
 ddl include mapped
 ddlsubst 'SOE_DATA' with 'WALI_SOE_DATA01' include all objtype 'TABLE'
 ddlsubst 'SOE_DATA' with 'WALI_SOE_INDEX01' include all objtype 'INDEX'
-ddlerror default ignore
-reperror (default,ignore)
+ddlerror default abend
+reperror (default,abend)
 ddloptions report
 allownoopupdates
 applynoopupdates
@@ -741,7 +824,7 @@ map SOE.*, target SOE.*;
 -- start the replicat process and check if it runs correctly
 -- make sure to pick the correct Oracle SCN obtained before launching the extract
 
-start replicat rep1 aftercsn 434916554
+start replicat rep1 aftercsn 436020308
 info replicat rep1 detail
 view report rep1
 
@@ -800,10 +883,11 @@ send extract ext1 logend
 dblogin useridalias al_tgt_s15421u0_WALIS2P domain DEV
 send replicat rep1 logend
 
-
--- we should check the count of some tables to see if it is at a minimum of difference
 -- once the lag is small and the counts are close, we should prepare for the application switch
+-- we should check the count of some tables to see if it is at a minimum of difference
 -- disconnect the application on the source and waits for the replication to catch up
+-- if the commands lag and send ... logend returns Yes, it means that GG finished extracting and processing the trail (it is at the end of the trail), so the application switch can be performed
+
 
 -- some checks if the replication works (at DML and DDL levels)
 
@@ -815,11 +899,13 @@ send replicat rep1 logend
 s05606w0:WALIS2P:WALIS2P_s06894w0:SYS
 
 sqlplus / as sysdba << END
-create table d3.toto3(id number);
-insert into d3.toto3 values(100);
+create table WALICE.toto3(id number generated always as identity, col2 varchar2(10));
+insert into WALICE.toto3(col2) values('value 100');
+insert into WALICE.toto3(col2) values('value 200');
+insert into WALICE.toto3(col2) values('value 300');
 commit;
-desc d3.toto3
-select * from d3.toto3;
+desc WALICE.toto3
+select * from WALICE.toto3;
 END
 
 
@@ -829,17 +915,38 @@ END
 s05606w0:WALIS2P:WALIS2P_s06894w0:SYS
 
 sqlplus / as sysdba << END
-drop table d3.toto3;
+select * from WALICE.toto2;
 END
 
 
 -- on the target server (s15421u0, database WALIS2P)
 
+sqlplus / as sysdba << END
+select * from WALICE.toto3;
+END
+Connecté à :
+Oracle Database 19c Enterprise Edition Release 19.0.0.0.0 - Production
+Version 19.20.0.0.0
+
+SYS@WALIS2P >
+        ID COL2
+---------- ----------
+         1 value 100
+         2 value 200
+         3 value 300
+
+
+
 -- the drop was replicated
 s15421u0:WALIS2P:WALIS2P_s15421u0:SYS
-SQL> desc d3.toto
+SQL> desc WALICE.toto
 ERROR:
-ORA-04043: object d3.toto does not exist
+ORA-04043: object WALICE.toto does not exist
+
+-- on the goldengate server (s17650b0)
+
+cd /home/oracle/swingbench/bin
+./charbench -c ../configs/SOE_Server_Side_V2.xml -u soe -p soe -uc 10 -rt "00:05" -cs s05606w0.snm.snecma:1521/WALIS2P -min 0 -max 0 -intermin 0 -intermax 0 -ld 0 -mr -nc -v users,tps
 
 
 -- at this point, the delta replication of transactions is done and we can connect the application to the new target database
