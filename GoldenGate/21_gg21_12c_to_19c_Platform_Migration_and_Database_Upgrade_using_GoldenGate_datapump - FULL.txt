@@ -312,7 +312,8 @@ statoptions reportfetch
 reportcount every 5 minutes, rate
 logallsupcols
 updaterecordformat compact
-tranlogoptions integratedparams (max_sga_size 100,parallelism 2)
+--tranlogoptions integratedparams (max_sga_size 100,parallelism 2)
+tranlogoptions checkpointretentiontime 1
 ddl include mapped
 ddloptions report
 gettruncates
@@ -703,10 +704,10 @@ info checkpointtable ggs_owner.*
 info heartbeattable
 
 
--- connect to the target database and create a parallel integrated replicat process: replicat naming convention : rep1 (must be 5 chars, or if exists, rep2,rep3, etc), replicat exttrail naming convention : <target_server_name>_<target_DB_name>/rt
+-- connect to the target database and create a integrated replicat process: replicat naming convention : rep1 (must be 5 chars, or if exists, rep2,rep3, etc), replicat exttrail naming convention : <target_server_name>_<target_DB_name>/rt
 dblogin useridalias al_tgt_s15421u0_WALIS2P domain DEV
-add replicat rep1, parallel, integrated, exttrail s15421u0_WALIS2P/rt checkpointtable ggs_owner.chkptab
-
+-- add replicat rep1, parallel, integrated, exttrail s15421u0_WALIS2P/rt checkpointtable ggs_owner.chkptab
+add replicat rep1, integrated, exttrail s15421u0_WALIS2P/rt checkpointtable ggs_owner.chkptab
 
 -- create the parameter file for the replicat process
 edit params rep1
@@ -726,10 +727,10 @@ reperror (default,ignore)
 ddloptions report
 allownoopupdates
 applynoopupdates
-map_parallelism 3
-min_apply_parallelism 2
-max_apply_parallelism 4
-split_trans_recs 10000
+--map_parallelism 3
+--min_apply_parallelism 2
+--max_apply_parallelism 4
+--split_trans_recs 10000
 handlecollisions
 gettruncates
 map WALICE.*, target WALICE.*;
