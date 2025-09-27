@@ -17,32 +17,12 @@ Latest GoldenGate/Database (OGG/RDBMS) Patch recommendations (Doc ID 2193391.1)
 -- on the source server (o11g)
 
 -- create SOE user and schema using oewizard from swingbench
+-- create SOE user and schema using oewizard from swingbench
+./oewizard -cl -create -dt thin -nc -cs o11g:1521/DB11G -u soe -p soe -scale 1 -tc 2 -dba "sys as sysdba" -dbap manager -ts SOE_DATA -normalfile -df "/u02/oradata/DB11G/soe_data01.dbf"
+
 
 -- activate the constraints that are not validated, especially the PK constraints
-SQL> @constr_not_valid
-Owner?(%)      : SOE
-
-dba_constraints
-Constraint Name 	             C Table				                  Search Cond.						                                Status	 Deferrable	    Deferred  Validated	    Generated      Bad Rely Invalid
------------------------------- - ------------------------------ ------------------------------------------------------- -------- -------------- --------- ------------- -------------- --- ---- -------
-ADDRESS_PK		                 P ADDRESSES                                                                              ENABLED  NOT DEFERRABLE IMMEDIATE NOT VALIDATED USER NAME
-ADD_CUST_FK		                 R ADDRESSES										                                                          ENABLED  DEFERRABLE	    IMMEDIATE NOT VALIDATED USER NAME
-CARD_DETAILS_PK 	             P CARD_DETAILS										                                                        ENABLED  NOT DEFERRABLE IMMEDIATE NOT VALIDATED USER NAME
-CUSTOMERS_PK		               P CUSTOMERS										                                                          ENABLED  NOT DEFERRABLE IMMEDIATE NOT VALIDATED USER NAME
-CUSTOMER_CREDIT_LIMIT_MAX      C CUSTOMERS			                 credit_limit <= 50000					                        ENABLED  DEFERRABLE	    IMMEDIATE NOT VALIDATED USER NAME
-CUSTOMER_ID_MIN 	             C CUSTOMERS			                 customer_id > 0 					                              ENABLED  DEFERRABLE	    IMMEDIATE NOT VALIDATED USER NAME
-INVENTORIES_PRODUCT_ID_FK      R INVENTORIES										                                                        ENABLED  NOT DEFERRABLE IMMEDIATE NOT VALIDATED USER NAME
-INVENTORIES_WAREHOUSES_FK      R INVENTORIES										                                                        ENABLED  NOT DEFERRABLE IMMEDIATE NOT VALIDATED USER NAME
-INVENTORY_PK		               P INVENTORIES										                                                        ENABLED  NOT DEFERRABLE IMMEDIATE NOT VALIDATED USER NAME
-ORDERS_CUSTOMER_ID_FK	         R ORDERS 										                                                            ENABLED  NOT DEFERRABLE IMMEDIATE NOT VALIDATED USER NAME
-ORDER_MODE_LOV		             C ORDERS 			                   order_mode in ('direct','online')			                ENABLED  DEFERRABLE	    IMMEDIATE NOT VALIDATED USER NAME
-ORDER_PK		                   P ORDERS 										                                                            ENABLED  NOT DEFERRABLE IMMEDIATE NOT VALIDATED USER NAME
-ORDER_TOTAL_MIN 	             C ORDERS 			                   order_total >= 0					                              ENABLED  DEFERRABLE	    IMMEDIATE NOT VALIDATED USER NAME
-ORDER_ITEMS_ORDER_ID_FK        R ORDER_ITEMS										                                                        ENABLED  NOT DEFERRABLE IMMEDIATE NOT VALIDATED USER NAME
-ORDER_ITEMS_PK		             P ORDER_ITEMS										                                                        ENABLED  NOT DEFERRABLE IMMEDIATE NOT VALIDATED USER NAME
-ORDER_ITEMS_PRODUCT_ID_FK      R ORDER_ITEMS										                                                        ENABLED  NOT DEFERRABLE IMMEDIATE NOT VALIDATED USER NAME
-PRODUCT_DESCRIPTIONS_PK        P PRODUCT_DESCRIPTIONS									                                                  ENABLED  NOT DEFERRABLE IMMEDIATE NOT VALIDATED USER NAME
-WAREHOUSES_PK		               P WAREHOUSES										                                                          ENABLED  NOT DEFERRABLE IMMEDIATE NOT VALIDATED USER NAME
+@constr_not_valid
 
 -- validate the PK constraints
 alter table soe.ADDRESSES enable validate constraint ADDRESS_PK;
@@ -54,36 +34,29 @@ alter table soe.ORDER_ITEMS enable validate constraint ORDER_ITEMS_PK;
 alter table soe.PRODUCT_DESCRIPTIONS enable validate constraint PRODUCT_DESCRIPTIONS_PK;
 alter table soe.WAREHOUSES enable validate constraint WAREHOUSES_PK;
 
--- validate the other constraints
-alter table soe.ADDRESSES enable validate constraint  ADD_CUST_FK;
--- alter table soe.CUSTOMERS enable validate constraint CUSTOMER_CREDIT_LIMIT_MAX;
-alter table soe.CUSTOMERS enable validate constraint CUSTOMER_ID_MIN;
-alter table soe.INVENTORIES enable validate constraint INVENTORIES_PRODUCT_ID_FK;
-alter table soe.INVENTORIES enable validate constraint INVENTORIES_WAREHOUSES_FK;
-alter table soe.ORDERS enable validate constraint ORDERS_CUSTOMER_ID_FK;
-alter table soe.ORDERS enable validate constraint ORDER_MODE_LOV;
-alter table soe.ORDERS enable validate constraint ORDER_TOTAL_MIN;
-alter table soe.ORDER_ITEMS enable validate constraint ORDER_ITEMS_ORDER_ID_FK;
-alter table soe.ORDER_ITEMS enable validate constraint ORDER_ITEMS_PRODUCT_ID_FK;
-
 -- set the logging attibute for tables and indexes
 @setlogging
 
+-- tables without PK/UK
+@tab_wo_pk
+
+-- Add UK to tables
+@add_uk_to_tab
 
 -- on the source server (o11g)
 
 -- configure the init.ora parameters for GoldenGate
 
 sqlplus / as sysdba  <<END
-startup;
 alter system set enable_goldengate_replication=true scope=both;
-alter system set streams_pool_size=1G scope=both;
+alter system set streams_pool_size=200M scope=both;
 alter database force logging;
 alter database add supplemental log data (primary key,unique,foreign key,all) columns;
-alter system switch logfile;
+alter table sys.seq$ add supplemental log data (primary key) columns;
 alter system set undo_management=auto scope=spfile;
 alter system set undo_retention = 86400 scope=spfile; 
 -- 86400 seconds = 24 hours
+alter system switch logfile;
 create pfile from spfile;
 END
 
@@ -105,7 +78,7 @@ grant select on sys.logmnr_buildlog             to ggs_owner;
 grant execute on sys.dbms_logmnr_d              to ggs_owner;
 grant execute on sys.dbms_flashback             to ggs_owner;
 grant execute on sys.utl_file                   to ggs_owner;
-@/u01/app/oracle/product/gg/prvtclkm.plb
+@$OGG_HOME/prvtclkm.plb
 grant execute on sys.dbms_internal_clkm         to ggs_owner;
 grant become user to ggs_owner;
 execute dbms_streams_auth.grant_admin_privilege('ggs_owner');

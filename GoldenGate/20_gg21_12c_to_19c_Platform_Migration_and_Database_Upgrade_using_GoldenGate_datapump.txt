@@ -34,25 +34,11 @@ alter table soe.WAREHOUSES enable validate constraint WAREHOUSES_PK;
 -- set the logging attibute for tables and indexes
 @setlogging
 
-SQL> @tab_wo_pk
-Owner?(%)      : SOE
+-- tables without PK/UK
+@tab_wo_pk
 
-dba_tables
-Tables without PK/UK
-------------------------------------------------------------
-SOE.LOGON
-SOE.ORDERENTRY_METADATA
-
-2 rows selected.
-
-SQL> @add_uk_to_tab.sql
-Owner?(%)      : SOE
-Table?(%)      : ORDERENTRY_METADATA
-
-SQL> @add_uk_to_tab
-Owner?(%)      : SOE
-Table?(%)      : LOGON
-Adding OGG_KEY_ID raw(16) column ...
+-- Add UK to tables
+@add_uk_to_tab.sql
 
 
 -- on the source server (o12c)
