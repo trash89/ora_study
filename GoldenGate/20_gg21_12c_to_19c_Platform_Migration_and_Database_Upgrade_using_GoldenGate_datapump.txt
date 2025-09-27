@@ -420,6 +420,7 @@ allownoopupdates
 applynoopupdates
 handlecollisions
 gettruncates
+assumetargetdefs
 map SOE.*, target SOE.*;
 -----------------------------------------------------------------------------
 

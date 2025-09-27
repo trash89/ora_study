@@ -823,6 +823,7 @@ allownoopupdates
 applynoopupdates
 handlecollisions
 gettruncates
+assumetargetdefs
 map WALICE.*, target WALICE.*;
 map WALICE_LECT.*, target WALICE_LECT.*;
 map SOE.*, target SOE.*;
