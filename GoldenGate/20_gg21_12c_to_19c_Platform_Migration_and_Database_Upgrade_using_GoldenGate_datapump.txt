@@ -19,30 +19,7 @@ Latest GoldenGate/Database (OGG/RDBMS) Patch recommendations (Doc ID 2193391.1)
 ./oewizard -cl -create -dt thin -nc -cs o12c:1521/ORCL -u soe -p soe -scale 1 -tc 2 -dba "sys as sysdba" -dbap manager -ts SOE_DATA -normalfile -df "/u02/oradata/ORCL/soe_data01.dbf"
 
 -- activate the constraints that are not validated, especially the PK constraints
-SQL> @constr_not_valid
-Owner?(%)      : SOE
-
-dba_constraints
-Constraint Name 	             C Table				                  Search Cond.						                                Status	 Deferrable	    Deferred  Validated	    Generated      Bad Rely Invalid
------------------------------- - ------------------------------ ------------------------------------------------------- -------- -------------- --------- ------------- -------------- --- ---- -------
-ADDRESS_PK		                 P ADDRESSES                                                                              ENABLED  NOT DEFERRABLE IMMEDIATE NOT VALIDATED USER NAME
-ADD_CUST_FK		                 R ADDRESSES										                                                          ENABLED  DEFERRABLE	    IMMEDIATE NOT VALIDATED USER NAME
-CARD_DETAILS_PK 	             P CARD_DETAILS										                                                        ENABLED  NOT DEFERRABLE IMMEDIATE NOT VALIDATED USER NAME
-CUSTOMERS_PK		               P CUSTOMERS										                                                          ENABLED  NOT DEFERRABLE IMMEDIATE NOT VALIDATED USER NAME
-CUSTOMER_CREDIT_LIMIT_MAX      C CUSTOMERS			                 credit_limit <= 50000					                        ENABLED  DEFERRABLE	    IMMEDIATE NOT VALIDATED USER NAME
-CUSTOMER_ID_MIN 	             C CUSTOMERS			                 customer_id > 0 					                              ENABLED  DEFERRABLE	    IMMEDIATE NOT VALIDATED USER NAME
-INVENTORIES_PRODUCT_ID_FK      R INVENTORIES										                                                        ENABLED  NOT DEFERRABLE IMMEDIATE NOT VALIDATED USER NAME
-INVENTORIES_WAREHOUSES_FK      R INVENTORIES										                                                        ENABLED  NOT DEFERRABLE IMMEDIATE NOT VALIDATED USER NAME
-INVENTORY_PK		               P INVENTORIES										                                                        ENABLED  NOT DEFERRABLE IMMEDIATE NOT VALIDATED USER NAME
-ORDERS_CUSTOMER_ID_FK	         R ORDERS 										                                                            ENABLED  NOT DEFERRABLE IMMEDIATE NOT VALIDATED USER NAME
-ORDER_MODE_LOV		             C ORDERS 			                   order_mode in ('direct','online')			                ENABLED  DEFERRABLE	    IMMEDIATE NOT VALIDATED USER NAME
-ORDER_PK		                   P ORDERS 										                                                            ENABLED  NOT DEFERRABLE IMMEDIATE NOT VALIDATED USER NAME
-ORDER_TOTAL_MIN 	             C ORDERS 			                   order_total >= 0					                              ENABLED  DEFERRABLE	    IMMEDIATE NOT VALIDATED USER NAME
-ORDER_ITEMS_ORDER_ID_FK        R ORDER_ITEMS										                                                        ENABLED  NOT DEFERRABLE IMMEDIATE NOT VALIDATED USER NAME
-ORDER_ITEMS_PK		             P ORDER_ITEMS										                                                        ENABLED  NOT DEFERRABLE IMMEDIATE NOT VALIDATED USER NAME
-ORDER_ITEMS_PRODUCT_ID_FK      R ORDER_ITEMS										                                                        ENABLED  NOT DEFERRABLE IMMEDIATE NOT VALIDATED USER NAME
-PRODUCT_DESCRIPTIONS_PK        P PRODUCT_DESCRIPTIONS									                                                  ENABLED  NOT DEFERRABLE IMMEDIATE NOT VALIDATED USER NAME
-WAREHOUSES_PK		               P WAREHOUSES										                                                          ENABLED  NOT DEFERRABLE IMMEDIATE NOT VALIDATED USER NAME
+@constr_not_valid
 
 -- validate the PK constraints
 alter table soe.ADDRESSES enable validate constraint ADDRESS_PK;
@@ -54,20 +31,28 @@ alter table soe.ORDER_ITEMS enable validate constraint ORDER_ITEMS_PK;
 alter table soe.PRODUCT_DESCRIPTIONS enable validate constraint PRODUCT_DESCRIPTIONS_PK;
 alter table soe.WAREHOUSES enable validate constraint WAREHOUSES_PK;
 
--- validate the other constraints
-alter table soe.ADDRESSES enable validate constraint  ADD_CUST_FK;
--- alter table soe.CUSTOMERS enable validate constraint CUSTOMER_CREDIT_LIMIT_MAX;
-alter table soe.CUSTOMERS enable validate constraint CUSTOMER_ID_MIN;
-alter table soe.INVENTORIES enable validate constraint INVENTORIES_PRODUCT_ID_FK;
-alter table soe.INVENTORIES enable validate constraint INVENTORIES_WAREHOUSES_FK;
-alter table soe.ORDERS enable validate constraint ORDERS_CUSTOMER_ID_FK;
-alter table soe.ORDERS enable validate constraint ORDER_MODE_LOV;
-alter table soe.ORDERS enable validate constraint ORDER_TOTAL_MIN;
-alter table soe.ORDER_ITEMS enable validate constraint ORDER_ITEMS_ORDER_ID_FK;
-alter table soe.ORDER_ITEMS enable validate constraint ORDER_ITEMS_PRODUCT_ID_FK;
-
 -- set the logging attibute for tables and indexes
 @setlogging
+
+SQL> @tab_wo_pk
+Owner?(%)      : SOE
+
+dba_tables
+Tables without PK/UK
+------------------------------------------------------------
+SOE.LOGON
+SOE.ORDERENTRY_METADATA
+
+2 rows selected.
+
+SQL> @add_uk_to_tab.sql
+Owner?(%)      : SOE
+Table?(%)      : ORDERENTRY_METADATA
+
+SQL> @add_uk_to_tab
+Owner?(%)      : SOE
+Table?(%)      : LOGON
+Adding OGG_KEY_ID raw(16) column ...
 
 
 -- on the source server (o12c)
@@ -91,10 +76,10 @@ User dropped.
 
 sqlplus / as sysdba  <<END
 alter system set enable_goldengate_replication=true scope=both;
-alter system set streams_pool_size=1G scope=both;
+alter system set streams_pool_size=200M scope=both;
 alter database force logging;
 alter database add supplemental log data (primary key,unique,foreign key,all) columns;
-alter system switch logfile;
+alter table sys.seq$ add supplemental log data (primary key) columns;
 alter system set undo_management=auto;
 alter system set undo_retention = 86400; 
 rem -- 86400 seconds = 24 hours
@@ -106,15 +91,15 @@ END
 -- create the gg_data tablespace and the ggs_owner user
 sqlplus / as sysdba << END
 create tablespace GG_DATA datafile '/u02/oradata/ORCL/gg_data01.dbf' size 1m autoextend on next 1m;
-create user GGS_OWNER identified by ggs_owner default tablespace GG_DATA temporary tablespace temp;
-grant connect,resource,dba  to GGS_OWNER;
-grant create session        to GGS_OWNER;
-grant flashback any table   to GGS_OWNER;
+create user ggs_owner identified by ggs_owner default tablespace gg_data temporary tablespace temp;
+grant connect,resource,dba  to ggs_owner;
+grant create session        to ggs_owner;
+grant flashback any table   to ggs_owner;
 exec dbms_goldengate_auth.grant_admin_privilege('GGS_OWNER');
 exec dbms_streams_auth.grant_admin_privilege('GGS_OWNER');
-BEGIN
-  DBMS_AUTO_TASK_ADMIN.disable(client_name => 'auto space advisor',operation => NULL,window_name => NULL);
-END;
+begin
+  dbms_auto_task_admin.disable(client_name => 'auto space advisor',operation => null,window_name => null);
+end;
 /
 END
 
@@ -122,7 +107,7 @@ END
 
 -- on the goldengate server (gg21)
 
-cd /u01/app/oracle/product/gg21/lib/sql/legacy
+cd $OGG_HOME/lib/sql/legacy
 sqlplus sys/manager@o12c:1521/ORCL as sysdba
 
 @sequence
@@ -130,7 +115,7 @@ Please enter the name of a schema for the GoldenGate database objects:
 GGS_OWNER
 Setting schema name to GGS_OWNER
 
-ALTER TABLE sys.seq$ ADD SUPPLEMENTAL LOG DATA (PRIMARY KEY) COLUMNS;
+alter table sys.seq$ add supplemental log data (primary key) columns;
 
 
 ---------------prepare the target database ---------------------------
@@ -141,10 +126,10 @@ ALTER TABLE sys.seq$ ADD SUPPLEMENTAL LOG DATA (PRIMARY KEY) COLUMNS;
 
 sqlplus / as sysdba  <<END
 alter system set enable_goldengate_replication=true scope=both;
-alter system set streams_pool_size=1G scope=both;
+alter system set streams_pool_size=200M scope=both;
 alter database force logging;
 alter database add supplemental log data (primary key,unique,foreign key,all) columns;
-alter system switch logfile;
+alter table sys.seq$ add supplemental log data (primary key) columns;
 alter system set undo_management=auto;
 alter system set undo_retention = 86400;
 rem -- 86400 seconds = 24 hours
@@ -174,15 +159,15 @@ User dropped.
 
 sqlplus / as sysdba << END
 create tablespace GG_DATA datafile '/u02/oradata/ORCL/gg_data01.dbf' size 1m autoextend on next 1m;
-create user GGS_OWNER identified by ggs_owner default tablespace GG_DATA temporary tablespace temp;
-grant connect,resource,dba  to GGS_OWNER;
-grant create session        to GGS_OWNER;
-grant flashback any table   to GGS_OWNER;
+create user ggs_owner identified by ggs_owner default tablespace gg_data temporary tablespace temp;
+grant connect,resource,dba  to ggs_owner;
+grant create session        to ggs_owner;
+grant flashback any table   to ggs_owner;
 exec dbms_goldengate_auth.grant_admin_privilege('GGS_OWNER');
 exec dbms_streams_auth.grant_admin_privilege('GGS_OWNER');
-BEGIN
-  DBMS_AUTO_TASK_ADMIN.disable(client_name => 'auto space advisor',operation => NULL,window_name => NULL);
-END;
+begin
+  dbms_auto_task_admin.disable(client_name => 'auto space advisor',operation => null,window_name => null);
+end;
 /
 END
 
@@ -191,7 +176,7 @@ END
 
 -- on the goldengate server (gg21)
 
-cd /u01/app/oracle/product/gg21/lib/sql/legacy
+cd $OGG_HOME/lib/sql/legacy
 sqlplus sys/manager@o19cs:1521/ORCL as sysdba
 
 @sequence
@@ -199,7 +184,7 @@ Please enter the name of a schema for the GoldenGate database objects:
 GGS_OWNER
 Setting schema name to GGS_OWNER
 
-ALTER TABLE sys.seq$ ADD SUPPLEMENTAL LOG DATA (PRIMARY KEY) COLUMNS;
+alter table sys.seq$ add supplemental log data (primary key) columns;
 
 
 ---------- prepare the goldengate server ---------------------
@@ -209,8 +194,6 @@ ALTER TABLE sys.seq$ ADD SUPPLEMENTAL LOG DATA (PRIMARY KEY) COLUMNS;
 adminclient
 
 connect http://gg21:5001 as ggma
-start deployment udepl1
-connect http://gg21:5001 as ggma
 
 info credentialstore domain OracleGoldenGate
 info credentialstore domain Network
@@ -218,10 +201,12 @@ info credentialstore domain Network
 -- add the alias to the source database
 alter credentialstore delete user alias_db_source domain OracleGoldenGate
 alter credentialstore add user ggs_owner@o12c:1521/ORCL password ggs_owner alias alias_db_source domain OracleGoldenGate
+dblogin useridalias alias_db_source domain OracleGoldenGate
 
 -- add the alias to the target database
 alter credentialstore delete user alias_db_target domain OracleGoldenGate
 alter credentialstore add user ggs_owner@o19cs:1521/ORCL password ggs_owner alias alias_db_target domain OracleGoldenGate
+dblogin useridalias alias_db_target domain OracleGoldenGate
 
 -- set the goldengate globals
 
@@ -255,18 +240,6 @@ info checkpointtable ggs_owner.*
 info heartbeattable
 
 
--- set the goldengate globals
-
-edit globals
------------------------------
-ggschema ggs_owner
-checkpointtable ggs_owner.chkptab
------------------------------
-
-view globals
-
-info credentialstore
-
 
 ------------------ prepare the source database for instantiation ---------------------------------------
 
@@ -297,14 +270,14 @@ edit params ext1
 -----------------------------------------------------------------------------
 extract ext1
 useridalias alias_db_source domain OracleGoldenGate
+exttrail lt
 discardrollover at 01:00 on sunday
 warnlongtrans 5min checkinterval 30min
 statoptions reportfetch
-reportcount every 5 minutes, rate
+reportcount every 1 minutes
 logallsupcols
 updaterecordformat compact
-tranlogoptions integratedparams (max_sga_size 100,parallelism 2)
-exttrail lt
+tranlogoptions checkpointretentiontime 1
 ddl include mapped
 ddloptions report
 gettruncates
@@ -315,10 +288,6 @@ sequence SOE.*;
 
 -- register the extract with the source database
 register extract ext1 database
-
-OGG (http://gg21:5001 udepl1 as alias_db_source@ORCL) 19> register extract ext1 database
-2025-09-07T19:50:45Z  INFO    OGG-02003  Extract group EXT1 successfully registered with database at SCN 1462893.
-
 
 -- add the exttrail for extract
 add exttrail lt, extract ext1
@@ -334,7 +303,7 @@ view report ext1
 -- we will perform the expdp/impdp to instantiatiate the target database at the scn prepared by add schematrandata/trandata
 
 -- run the bench
-./charbench -c ../configs/SOE_Server_Side_V2.xml -u soe -p soe -uc 10 -rt "00:05" -dt thin -cs o12c:1521/ORCL -min 0 -max 0 -intermin 0 -intermax 0 -v users,tps
+./charbench -c ../configs/SOE_Server_Side_V2.xml -u soe -p soe -uc 10 -rt "00:05" -cs o12c:1521/ORCL -min 0 -max 0 -intermin 0 -intermax 0 -ld 0 -mr -nc -v tps
 
 
 -- on the source server (o12c)
@@ -441,11 +410,9 @@ connect http://gg21:5001 as ggma
 
 
 
--- connect to the target and create a parallel integrated replicat process
+-- connect to the target and create an integrated replicat process
 dblogin useridalias alias_db_target domain OracleGoldenGate
-add replicat rep1, parallel, integrated, exttrail rt checkpointtable ggs_owner.chkptab
-
-
+add replicat rep1,integrated, exttrail rt checkpointtable ggs_owner.chkptab
 
 -- create the parameter file for the replicat process
 edit params rep1
@@ -453,22 +420,18 @@ edit params rep1
 -----------------------------------------------------------------------------
 replicat rep1
 useridalias alias_db_target domain OracleGoldenGate
-reportcount every 1 minute, rate
+reportcount every 1 minute
 reportrollover at 01:00 on sunday
 discardrollover at 01:00 on sunday
 dboptions enable_instantiation_filtering
 ddl include mapped
-ddlsubst 'SOE' with 'SOE_DATA' include all objtype 'TABLE'
-ddlsubst 'SOE' with 'SOE_INDX' include all objtype 'INDEX'
+ddlsubst 'SOE_DATA' with 'SOE_DATA' include all objtype 'TABLE'
+ddlsubst 'SOE_DATA' with 'SOE_INDX' include all objtype 'INDEX'
 ddlerror default abend
 reperror (default,abend)
 ddloptions report
 allownoopupdates
 applynoopupdates
-map_parallelism 3
-min_apply_parallelism 2
-max_apply_parallelism 4
-split_trans_recs 10000
 handlecollisions
 gettruncates
 map SOE.*, target SOE.*;
@@ -510,15 +473,20 @@ info distpath ltrt detail
 -- we check the lag for the extract and the replicat
 dblogin useridalias alias_db_source domain OracleGoldenGate
 lag extract ext1
+info extract ext1, showch
+
 dblogin useridalias alias_db_target domain OracleGoldenGate
 lag replicat rep1
+info replicat rep1, showch
 
 -- statistics for extract and replicat
-stats extract ext1, total, reportrate min
-stats replicat rep1, total, reportrate min
+stats extract ext1, total
+stats replicat rep1, total
 
 dblogin useridalias alias_db_source domain OracleGoldenGate
+send extract ext1 showtrans
 send extract ext1 logend
+
 dblogin useridalias alias_db_target domain OracleGoldenGate
 send replicat rep1 logend
 

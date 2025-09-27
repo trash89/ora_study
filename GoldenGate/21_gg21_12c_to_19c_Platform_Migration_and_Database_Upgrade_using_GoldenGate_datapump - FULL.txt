@@ -106,11 +106,15 @@ Creation du schema GGS_OWNER :   Or_a8N66449HH6V5SRb807m.
 
 
 sqlplus / as sysdba << END
-grant connect,resource,dba  to GGS_OWNER;
-grant create session        to GGS_OWNER;
-grant flashback any table   to GGS_OWNER;
+grant connect,resource,dba  to ggs_owner;
+grant create session        to ggs_owner;
+grant flashback any table   to ggs_owner;
 exec dbms_goldengate_auth.grant_admin_privilege('GGS_OWNER');
 exec dbms_streams_auth.grant_admin_privilege('GGS_OWNER');
+begin
+  dbms_auto_task_admin.disable(client_name => 'auto space advisor',operation => null,window_name => null);
+end;
+/
 END
 
 -- create the user mysystem on the source database in order to perform administrative tasks, this user will not be imported on the target
@@ -119,6 +123,11 @@ create user mysystem identified by "SafranAircraft1!";
 grant connect,resource,dba to mysystem;
 grant sysdba to mysystem;
 END
+
+
+-- take a full backup of the source database
+scr
+./RMAN_bckp $ORACLE_SID FULL
 
 
 -- once the GGS_OWNER is created, we need to run the sequence.sql script in order to activate the replication of sequences in GoldenGate
@@ -290,6 +299,9 @@ alter index "SOE"."CARDDETAILS_CUST_IX" logging;
 
 END
 
+@tab_wo_pk
+@add_uk_to_tab
+
 -- on the goldengate server (s17650b0)
 
 adminclient
@@ -366,6 +378,7 @@ add exttrail s05606w0_WALIS2P/lt, extract ext1 megabytes 500
 -- determine the SCN of the clone: run this query on the source database and note the scn. The clone must be done at this scn and the extract will start at this scn too
 
 sqlplus / as sysdba << END
+prompt exec dbms_stats.gather_dictionary_stats();
 exec dbms_stats.gather_dictionary_stats();
 alter system switch logfile;
 select min(scn) as instantiation_scn
@@ -380,6 +393,11 @@ END
 INSTANTIATION_SCN
 -----------------
         436020308
+
+
+-- Take the archivelogs backup before cloning for normalization
+scr
+./RMAN_bckp $ORACLE_SID ARCHIVELOG
 
 
 -- on the goldengate server (s17650b0)
@@ -410,17 +428,13 @@ insert into WALICE.toto values (100);
 commit;
 END
 
--- take a full backup
-scr
-./RMAN_bckp $ORACLE_SID FULL
-
 
 -- generate the activity for the POC, on the SOE user, will generate transactions for 10 clients for 5 minutes
 
 -- on the goldengate server (s17650b0)
 
 cd /home/oracle/swingbench/bin
-./charbench -c ../configs/SOE_Server_Side_V2.xml -u soe -p soe -uc 10 -rt "00:05" -cs s05606w0.snm.snecma:1521/WALIS2P -min 0 -max 0 -intermin 0 -intermax 0 -ld 0 -mr -nc -v users,tps
+./charbench -c ../configs/SOE_Server_Side_V2.xml -u soe -p soe -uc 10 -rt "00:05" -cs s05606w0.snm.snecma:1521/WALIS2P -min 0 -max 0 -intermin 0 -intermax 0 -ld 0 -mr -nc -v tps
 
 Swingbench
 Author  :        Dominic Giles
@@ -479,10 +493,6 @@ Success : Pdf file results.pdf was created from results.xml results file.
 -- establish the ssh equivalence between the source and the target servers
 
 -- check the source server listener.ora and tnsnames.ora to make sure the db is accessible @ORACLE_SID
-
--- archivelogs backup
-scr
-./RMAN_bckp $ORACLE_SID ARCHIVELOG
 
 
 scr
@@ -870,10 +880,10 @@ info replicat rep1, showch
 
 -- show the statistics for the extract and replicat processes
 dblogin useridalias al_src_s05606w0_WALIS2P domain DEV
-stats extract ext1, total, reportrate min
+stats extract ext1, total
 
 dblogin useridalias al_tgt_s15421u0_WALIS2P domain DEV
-stats replicat rep1, total, reportrate min
+stats replicat rep1, total
 
 -- check if the extract and replicat processed all records from the trail
 dblogin useridalias al_src_s05606w0_WALIS2P domain DEV
@@ -945,7 +955,7 @@ ORA-04043: object WALICE.toto does not exist
 -- on the goldengate server (s17650b0)
 
 cd /home/oracle/swingbench/bin
-./charbench -c ../configs/SOE_Server_Side_V2.xml -u soe -p soe -uc 10 -rt "00:05" -cs s05606w0.snm.snecma:1521/WALIS2P -min 0 -max 0 -intermin 0 -intermax 0 -ld 0 -mr -nc -v users,tps
+./charbench -c ../configs/SOE_Server_Side_V2.xml -u soe -p soe -uc 10 -rt "00:05" -cs s05606w0.snm.snecma:1521/WALIS2P -min 0 -max 0 -intermin 0 -intermax 0 -ld 0 -mr -nc -v tps
 
 
 -- at this point, the delta replication of transactions is done and we can connect the application to the new target database
@@ -1018,7 +1028,7 @@ alter database no force logging;
 alter database drop supplemental log data (primary key,unique,foreign key,all) columns;
 drop user GGS_OWNER cascade;
 drop user mysystem cascade;
-drop tablespace WALI_GGS_OWNER_DATA01  including contents and datafiles;
+drop tablespace WALI_GGS_OWNER_DATA01 including contents and datafiles;
 drop tablespace WALI_GGS_OWNER_INDEX01 including contents and datafiles;
 drop tablespace WALI_GGS_OWNER_TEMP including contents and datafiles;
 drop user soe cascade;

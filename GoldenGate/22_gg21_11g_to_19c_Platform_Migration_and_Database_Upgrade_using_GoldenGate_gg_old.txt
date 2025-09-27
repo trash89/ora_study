@@ -93,25 +93,25 @@ END
 sqlplus / as sysdba <<END
 create tablespace gg_data datafile '/u02/oradata/DB11G/gg_data01.dbf' size 1m autoextend on next 1m;
 create user ggs_owner identified by ggs_owner default tablespace gg_data temporary tablespace temp;
-GRANT CONNECT,RESOURCE                          TO ggs_owner;
-GRANT GGS_GGSUSER_ROLE                          TO ggs_owner;
-GRANT CREATE SESSION,ALTER SESSION,ALTER SYSTEM TO ggs_owner;
-GRANT SELECT ANY TABLE,SELECT ANY DICTIONARY    TO ggs_owner;
-GRANT SELECT ANY TRANSACTION                    TO ggs_owner;
-GRANT FLASHBACK ANY TABLE,LOCK ANY TABLE        TO ggs_owner;
-GRANT SELECT ON dba_clusters                    TO ggs_owner;
-GRANT SELECT ON SYS.V_$DATABASE                 TO ggs_owner;
-GRANT SELECT ON SYS.logmnr_buildlog             TO ggs_owner;
-GRANT EXECUTE ON SYS.dbms_logmnr_d              TO ggs_owner;
-GRANT EXECUTE ON SYS.DBMS_FLASHBACK             TO ggs_owner;
-GRANT EXECUTE ON SYS.utl_file                   TO ggs_owner;
+grant connect,resource                          to ggs_owner;
+grant ggs_ggsuser_role                          to ggs_owner;
+grant create session,alter session,alter system to ggs_owner;
+grant select any table,select any dictionary    to ggs_owner;
+grant select any transaction                    to ggs_owner;
+grant flashback any table,lock any table        to ggs_owner;
+grant select on dba_clusters                    to ggs_owner;
+grant select on sys.v_$database                 to ggs_owner;
+grant select on sys.logmnr_buildlog             to ggs_owner;
+grant execute on sys.dbms_logmnr_d              to ggs_owner;
+grant execute on sys.dbms_flashback             to ggs_owner;
+grant execute on sys.utl_file                   to ggs_owner;
 @/u01/app/oracle/product/gg/prvtclkm.plb
-GRANT EXECUTE ON SYS.dbms_internal_clkm         TO ggs_owner;
-GRANT BECOME USER TO ggs_owner;
-execute dbms_streams_auth.grant_admin_privilege('GGS_OWNER');
-EXEC DBMS_GOLDENGATE_AUTH.GRANT_ADMIN_PRIVILEGE('ggs_owner');
-GRANT DBA                                       TO ggs_owner;
-grant become user                               to GGS_OWNER;
+grant execute on sys.dbms_internal_clkm         to ggs_owner;
+grant become user to ggs_owner;
+execute dbms_streams_auth.grant_admin_privilege('ggs_owner');
+exec dbms_goldengate_auth.grant_admin_privilege('ggs_owner');
+grant dba                                       to ggs_owner;
+grant become user                               to ggs_owner;
 END
 
 -- configure DDL Synchronization
