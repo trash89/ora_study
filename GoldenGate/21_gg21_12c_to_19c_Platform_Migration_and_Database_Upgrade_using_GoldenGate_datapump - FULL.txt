@@ -90,6 +90,7 @@ alter system set enable_goldengate_replication=true scope=both;
 alter system set streams_pool_size=200M scope=both;
 alter database force logging;
 alter database add supplemental log data (primary key,unique,foreign key,all) columns;
+alter table sys.seq$ add supplemental log data (primary key) columns;
 alter system set undo_management=auto scope=spfile;
 alter system set undo_retention = 86400; 
 alter system switch logfile;
@@ -334,10 +335,9 @@ exttrail s05606w0_WALIS2P/lt
 discardrollover at 01:00 on sunday
 warnlongtrans 5min checkinterval 30min
 statoptions reportfetch
-reportcount every 5 minutes, rate
+reportcount every 1 minutes
 logallsupcols
 updaterecordformat compact
---tranlogoptions integratedparams (max_sga_size 100,parallelism 2)
 tranlogoptions checkpointretentiontime 1
 ddl include mapped
 ddloptions report
@@ -359,13 +359,14 @@ register extract ext1 database
 add exttrail s05606w0_WALIS2P/lt, extract ext1 megabytes 500
 
 
--- on the source server (s06894w0, database WALIS2P)
-
 -- prepare the source database for cloning
+
+-- on the source server (s06894w0, database WALIS2P)
 
 -- determine the SCN of the clone: run this query on the source database and note the scn. The clone must be done at this scn and the extract will start at this scn too
 
 sqlplus / as sysdba << END
+exec dbms_stats.gather_dictionary_stats();
 alter system switch logfile;
 select min(scn) as instantiation_scn
   from (select min(start_scn) as scn
@@ -685,6 +686,7 @@ alter system set enable_goldengate_replication=true scope=both;
 alter system set streams_pool_size=200M scope=both;
 alter database force logging;
 alter database add supplemental log data (primary key,unique,foreign key,all) columns;
+alter table sys.seq$ add supplemental log data (primary key) columns;
 alter system set undo_management=auto scope=spfile;
 alter system set undo_retention = 86400; 
 alter system switch logfile;
@@ -787,9 +789,8 @@ info checkpointtable ggs_owner.*
 info heartbeattable
 
 
--- connect to the target database and create a integrated replicat process: replicat naming convention : rep1 (must be 5 chars, or if exists, rep2,rep3, etc), replicat exttrail naming convention : <target_server_name>_<target_DB_name>/rt
+-- connect to the target database and create an integrated replicat process: replicat naming convention : rep1 (must be 5 chars, or if exists, rep2,rep3, etc), replicat exttrail naming convention : <target_server_name>_<target_DB_name>/rt
 dblogin useridalias al_tgt_s15421u0_WALIS2P domain DEV
--- add replicat rep1, parallel, integrated, exttrail s15421u0_WALIS2P/rt checkpointtable ggs_owner.chkptab
 add replicat rep1, integrated, exttrail s15421u0_WALIS2P/rt checkpointtable ggs_owner.chkptab
 
 -- create the parameter file for the replicat process
@@ -798,7 +799,7 @@ edit params rep1
 -----------------------------------------------------------------------------
 replicat rep1
 useridalias al_tgt_s15421u0_WALIS2P domain DEV
-reportcount every 1 minute, rate
+reportcount every 1 minute
 reportrollover at 01:00 on sunday
 discardrollover at 01:00 on sunday
 dboptions enable_instantiation_filtering
@@ -810,10 +811,6 @@ reperror (default,abend)
 ddloptions report
 allownoopupdates
 applynoopupdates
---map_parallelism 3
---min_apply_parallelism 2
---max_apply_parallelism 4
---split_trans_recs 10000
 handlecollisions
 gettruncates
 map WALICE.*, target WALICE.*;
@@ -865,9 +862,11 @@ info distpath ltrt1 detail
 -- check the lag for the extract and the replicat processes
 dblogin useridalias al_src_s05606w0_WALIS2P domain DEV
 lag extract ext1
+info extract ext1, showch
 
 dblogin useridalias al_tgt_s15421u0_WALIS2P domain DEV
 lag replicat rep1
+info replicat rep1, showch
 
 -- show the statistics for the extract and replicat processes
 dblogin useridalias al_src_s05606w0_WALIS2P domain DEV
@@ -878,6 +877,7 @@ stats replicat rep1, total, reportrate min
 
 -- check if the extract and replicat processed all records from the trail
 dblogin useridalias al_src_s05606w0_WALIS2P domain DEV
+send extract ext1 showtrans
 send extract ext1 logend
 
 dblogin useridalias al_tgt_s15421u0_WALIS2P domain DEV
@@ -904,18 +904,12 @@ insert into WALICE.toto3(col2) values('value 100');
 insert into WALICE.toto3(col2) values('value 200');
 insert into WALICE.toto3(col2) values('value 300');
 commit;
-desc WALICE.toto3
-select * from WALICE.toto3;
 END
 
-
--- on the source server (s05606w0, base WALIS2P)
-
--- drop the table, the drop should be replicated
+-- drop a table into a replicated schema, it should be dropped on the target database
 s05606w0:WALIS2P:WALIS2P_s06894w0:SYS
-
 sqlplus / as sysdba << END
-select * from WALICE.toto2;
+drop table WALICE.toto;
 END
 
 
@@ -924,6 +918,7 @@ END
 sqlplus / as sysdba << END
 select * from WALICE.toto3;
 END
+
 Connecté à :
 Oracle Database 19c Enterprise Edition Release 19.0.0.0.0 - Production
 Version 19.20.0.0.0
@@ -942,6 +937,10 @@ s15421u0:WALIS2P:WALIS2P_s15421u0:SYS
 SQL> desc WALICE.toto
 ERROR:
 ORA-04043: object WALICE.toto does not exist
+
+
+
+--- Generate the activity
 
 -- on the goldengate server (s17650b0)
 
